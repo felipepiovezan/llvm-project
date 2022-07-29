@@ -287,6 +287,13 @@ public:
 
   Error materialize(raw_ostream &OS) const;
 
+  static Optional<MCAssemblerRef> Cast(MCObjectProxy Ref) {
+    auto Specific = SpecificRefT::Cast(Ref);
+    if (!Specific)
+      return None;
+    return MCAssemblerRef(*Specific);
+  }
+
 private:
   MCAssemblerRef(SpecificRefT Ref) : SpecificRefT(Ref) {}
 };

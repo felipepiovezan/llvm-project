@@ -36,6 +36,7 @@ add_llvm_tool_subdirectory(llvm-config)
 add_llvm_tool_subdirectory(llvm-lto)
 add_llvm_tool_subdirectory(llvm-profdata)
 add_llvm_tool_subdirectory(llvm-cas)
+add_llvm_tool_subdirectory(llvm-cas-mc-dump)
 
 # Projects supported via LLVM_EXTERNAL_*_SOURCE_DIR need to be explicitly
 # specified.

@@ -3469,7 +3469,7 @@ void DwarfDebug::addDwarfTypeUnitType(DwarfCompileUnit &CU,
     // and all its dependent types.
     for (auto &TU : TypeUnitsToAdd) {
       InfoHolder.computeSizeAndOffsetsForUnit(TU.first.get());
-      InfoHolder.emitUnit(TU.first.get(), useSplitDwarf());
+      InfoHolder.addUnit(std::move(TU.first));
     }
   }
   CU.addDIETypeSignature(RefDie, Signature);

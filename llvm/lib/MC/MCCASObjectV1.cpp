@@ -92,6 +92,8 @@ template <> struct llvm::DenseMapInfo<llvm::dwarf::Form> {
   }
 };
 
+enum class UnitKind { TU, CU };
+
 /// A DWARFObject implementation that can be used to dwarfdump CAS-formatted
 /// debug info.
 class InMemoryCASDWARFObject : public DWARFObject {
@@ -119,6 +121,7 @@ public:
   struct PartitionedDebugInfoSection {
     SmallVector<char, 0> DebugInfoCURefData;
     SmallVector<char, 0> DistinctData;
+    UnitKind Kind;
     constexpr static std::array FormsToPartition{
         llvm::dwarf::Form::DW_FORM_strp};
   };
@@ -797,6 +800,11 @@ private:
         return createStringError(inconvertibleErrorCode(),
                                  "Invalid CURef after PaddingRef");
       CUData.push_back(CURef->getData());
+    } else if (auto TURef = DebugInfoTURef::Cast(*Proxy)) {
+      if (Padding.has_value())
+        return createStringError(inconvertibleErrorCode(),
+                                 "Invalid TURef after PaddingRef");
+      CUData.push_back(TURef->getData());
     } else if (auto PaddingNode = PaddingRef::Cast(*Proxy)) {
       if (Padding.has_value())
         return createStringError(inconvertibleErrorCode(),
@@ -2052,7 +2060,7 @@ MCCASBuilder::splitDebugInfoSectionData(MutableArrayRef<char> DebugInfoData) {
 }
 
 Error MCCASBuilder::createDebugInfoSection(
-    ArrayRef<DebugInfoCURef> CURefs, DebugAbbrevOffsetsRef AbbrevOffsetsRef,
+    ArrayRef<MCObjectProxy> CURefs, DebugAbbrevOffsetsRef AbbrevOffsetsRef,
     DebugInfoDistinctDataRef DebugDistinctDataRef) {
   if (CURefs.empty())
     return Error::success();
@@ -2199,6 +2207,8 @@ InMemoryCASDWARFObject::partitionCUData(ArrayRef<char> DebugInfoData,
         copyHeader(PartitionedData.DebugInfoCURefData, DebugInfoData);
     assert(HeaderInformation);
     CUOffset += HeaderInformation->CopiedAmount;
+    PartitionedData.Kind =
+        HeaderInformation->CopiedAmount > 12 ? UnitKind::TU : UnitKind::CU;
     partitionCUDie(PartitionedData, CUDie, DebugInfoData, CUOffset,
                    IsLittleEndian, DCU.getAddressByteSize());
   }
@@ -2239,7 +2249,7 @@ Expected<AbbrevAndDebugSplit> MCCASBuilder::splitDebugInfoAndAbbrevSections() {
   if (!AbbrevRefs)
     return AbbrevRefs.takeError();
 
-  SmallVector<DebugInfoCURef> CURefs;
+  SmallVector<MCObjectProxy> CURefs;
   SmallVector<char> DistinctData;
   for (auto [CUData, AbbrevOffset] :
        llvm::zip(SplitInfo->SplitCUData, SplitInfo->AbbrevOffsets)) {
@@ -2250,11 +2260,20 @@ Expected<AbbrevAndDebugSplit> MCCASBuilder::splitDebugInfoAndAbbrevSections() {
       return PartitionedData.takeError();
     DistinctData.append(PartitionedData->DistinctData.begin(),
                         PartitionedData->DistinctData.end());
-    auto DbgInfoRef = DebugInfoCURef::create(
-        *this, toStringRef(PartitionedData->DebugInfoCURefData));
-    if (!DbgInfoRef)
-      return DbgInfoRef.takeError();
-    CURefs.push_back(*DbgInfoRef);
+    auto CASObj = [&]() -> Expected<MCObjectProxy> {
+      switch (PartitionedData->Kind) {
+      case UnitKind::CU:
+        return DebugInfoCURef::create(
+            *this, toStringRef(PartitionedData->DebugInfoCURefData));
+      case UnitKind::TU:
+        return DebugInfoTURef::create(
+            *this, toStringRef(PartitionedData->DebugInfoCURefData));
+      }
+      llvm_unreachable("bad unit kind");
+    }();
+    if (!CASObj)
+      return CASObj.takeError();
+    CURefs.push_back(*CASObj);
   }
 
   SmallVector<char> EncodedOffsets =

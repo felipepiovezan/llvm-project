@@ -120,8 +120,41 @@ public:
   struct PartitionedDebugInfoSection {
     SmallVector<char, 0> DebugInfoCURefData;
     SmallVector<char, 0> DistinctData;
-    constexpr static std::array FormsToPartition{
-        llvm::dwarf::Form::DW_FORM_strp};
+
+    static bool doesntDedup(dwarf::Form Form, dwarf::Attribute Attr) {
+      // This is a list of attributes known to have a high impact in the
+      // deduplication of CAS objects.
+      // Some of these are dependent on the Attribute in which they are used.
+      static const DenseMap<dwarf::Form, SmallVector<dwarf::Attribute>>
+          FormsToPartition{
+              {dwarf::Form::DW_FORM_strp, {}},
+              {dwarf::Form::DW_FORM_ref_addr, {}},
+              {dwarf::Form::DW_FORM_data1,
+               {dwarf::Attribute::DW_AT_call_file,
+                dwarf::Attribute::DW_AT_decl_file,
+                dwarf::Attribute::DW_AT_decl_line}},
+              {dwarf::Form::DW_FORM_data2,
+               {dwarf::Attribute::DW_AT_call_file,
+                dwarf::Attribute::DW_AT_decl_file,
+                dwarf::Attribute::DW_AT_decl_line}},
+              {dwarf::Form::DW_FORM_data4,
+               {dwarf::Attribute::DW_AT_call_file,
+                dwarf::Attribute::DW_AT_decl_file,
+                dwarf::Attribute::DW_AT_decl_line}},
+              {dwarf::Form::DW_FORM_data8,
+               {dwarf::Attribute::DW_AT_decl_file,
+                dwarf::Attribute::DW_AT_call_file,
+                dwarf::Attribute::DW_AT_decl_line}},
+              {dwarf::Form::DW_FORM_addrx, {}},
+          };
+
+      auto it = FormsToPartition.find(Form);
+      if (it == FormsToPartition.end())
+        return false;
+      if (it->second.empty())
+        return true;
+      return llvm::is_contained(it->second, Attr);
+    }
   };
 
   /// Create a DwarfCompileUnit that represents the compile unit at \p CUOffset
@@ -1056,11 +1089,12 @@ materializeCUDie(DWARFCompileUnit &DCU, MutableArrayRef<char> SectionContents,
   // file.
   for (unsigned I = 0; I < AbbrevDecl->getNumAttributes(); I++) {
     auto Form = AbbrevDecl->getFormByIndex(I);
+    auto Attr = AbbrevDecl->getAttrByIndex(I);
     auto *U = CUDie.getDwarfUnit();
     dwarf::FormParams FP = U->getFormParams();
-    bool FormInDistinctDataRef = is_contained(
-        InMemoryCASDWARFObject::PartitionedDebugInfoSection::FormsToPartition,
-        Form);
+    bool FormInDistinctDataRef =
+        InMemoryCASDWARFObject::PartitionedDebugInfoSection::doesntDedup(Form,
+                                                                         Attr);
     auto FormSize = getFormSize(
         Form, FP,
         FormInDistinctDataRef ? toStringRef(DistinctDataArrayRef) : CUData,
@@ -2076,9 +2110,8 @@ static void partitionCUDie(
   append_range(PartitionedData.DebugInfoCURefData,
                DebugInfoData.slice(PrevOffset, Size));
   for (const DWARFAttribute &AttrValue : CUDie.attributes()) {
-    if (is_contained(InMemoryCASDWARFObject::PartitionedDebugInfoSection::
-                         FormsToPartition,
-                     AttrValue.Value.getForm()))
+    if (InMemoryCASDWARFObject::PartitionedDebugInfoSection::doesntDedup(
+            AttrValue.Value.getForm(), AttrValue.Attr))
       append_range(PartitionedData.DistinctData,
                    DebugInfoData.slice(AttrValue.Offset, AttrValue.ByteSize));
     else if (AttrValue.Attr != llvm::dwarf::DW_AT_stmt_list)

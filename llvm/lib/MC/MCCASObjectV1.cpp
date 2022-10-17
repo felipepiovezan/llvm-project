@@ -126,10 +126,30 @@ public:
     static bool doesntDedup(dwarf::Form Form, dwarf::Attribute Attr) {
       static const DenseMap<dwarf::Form, SmallVector<dwarf::Attribute>>
           FormsToPartition{{dwarf::Form::DW_FORM_strp, {}},
+                           {dwarf::Form::DW_FORM_strx1, {}},
+                           {dwarf::Form::DW_FORM_strx2, {}},
+                           {dwarf::Form::DW_FORM_strx4, {}},
+                           {dwarf::Form::DW_FORM_strx, {}},
+                           {dwarf::Form::DW_FORM_ref_udata, {}},
                            {dwarf::Form::DW_FORM_ref1, {}},
                            {dwarf::Form::DW_FORM_ref2, {}},
                            {dwarf::Form::DW_FORM_ref4, {}},
                            {dwarf::Form::DW_FORM_ref8, {}},
+                           {dwarf::Form::DW_FORM_udata,
+                            {dwarf::Attribute::DW_AT_high_pc,
+                             dwarf::Attribute::DW_AT_call_file,
+                             dwarf::Attribute::DW_AT_decl_file,
+                             dwarf::Attribute::DW_AT_decl_line}},
+                           {dwarf::Form::DW_FORM_sdata,
+                            {dwarf::Attribute::DW_AT_high_pc,
+                             dwarf::Attribute::DW_AT_call_file,
+                             dwarf::Attribute::DW_AT_decl_file,
+                             dwarf::Attribute::DW_AT_decl_line}},
+                           {dwarf::Form::DW_FORM_data1,
+                            {dwarf::Attribute::DW_AT_high_pc,
+                             dwarf::Attribute::DW_AT_call_file,
+                             dwarf::Attribute::DW_AT_decl_file,
+                             dwarf::Attribute::DW_AT_decl_line}},
                            {dwarf::Form::DW_FORM_data1,
                             {dwarf::Attribute::DW_AT_high_pc,
                              dwarf::Attribute::DW_AT_call_file,
@@ -152,24 +172,6 @@ public:
                              dwarf::Attribute::DW_AT_decl_line}},
                            {dwarf::Form::DW_FORM_addrx, {}},
                            {dwarf::Form::DW_FORM_exprloc, {}}};
-      // Data forms are used by the following attributes:
-      // AT_accessibility
-      // AT_bit_size
-      // AT_byte_size
-      // AT_call_column
-      // AT_call_file
-      // AT_call_line
-      // AT_calling_convention
-      // AT_count
-      // AT_data_bit_offset
-      // AT_data_member_location
-      // AT_decl_file
-      // AT_decl_line
-      // AT_encoding
-      // AT_high_pc
-      // AT_language
-      // AT_virtuality
-
       auto it = FormsToPartition.find(Form);
       if (it == FormsToPartition.end())
         return false;

@@ -138,53 +138,42 @@ public:
     static bool doesntDedup(dwarf::Form Form, dwarf::Attribute Attr) {
       static const DenseMap<dwarf::Form, SmallVector<dwarf::Attribute>>
           FormsToPartition{{dwarf::Form::DW_FORM_strp, {}},
-                           {dwarf::Form::DW_FORM_strx1, {}},
-                           {dwarf::Form::DW_FORM_strx2, {}},
-                           {dwarf::Form::DW_FORM_strx4, {}},
-                           {dwarf::Form::DW_FORM_strx, {}},
-                           {dwarf::Form::DW_FORM_rnglistx, {}},
-                           {dwarf::Form::DW_FORM_ref_udata, {}},
-                           {dwarf::Form::DW_FORM_ref1, {}},
-                           {dwarf::Form::DW_FORM_ref2, {}},
-                           {dwarf::Form::DW_FORM_ref4, {}},
-                           {dwarf::Form::DW_FORM_ref8, {}},
-                           {dwarf::Form::DW_FORM_udata,
-                            {dwarf::Attribute::DW_AT_high_pc,
-                             dwarf::Attribute::DW_AT_call_file,
-                             dwarf::Attribute::DW_AT_decl_file,
-                             dwarf::Attribute::DW_AT_decl_line}},
-                           {dwarf::Form::DW_FORM_sdata,
-                            {dwarf::Attribute::DW_AT_high_pc,
-                             dwarf::Attribute::DW_AT_call_file,
-                             dwarf::Attribute::DW_AT_decl_file,
-                             dwarf::Attribute::DW_AT_decl_line}},
+                           //{dwarf::Form::DW_FORM_rnglistx, {}}, // small total size increase when commented.
+                           //{dwarf::Form::DW_FORM_ref_udata, {}},// this _some_ impact, but seems better left out.
+                           {dwarf::Form::DW_FORM_ref_addr, {}},   // really needed.
+
+                           // The "data1,2,4,8" as below seem important.
                            {dwarf::Form::DW_FORM_data1,
-                            {dwarf::Attribute::DW_AT_high_pc,
+                            {//dwarf::Attribute::DW_AT_high_pc,
                              dwarf::Attribute::DW_AT_call_file,
                              dwarf::Attribute::DW_AT_decl_file,
-                             dwarf::Attribute::DW_AT_decl_line}},
-                           {dwarf::Form::DW_FORM_data1,
-                            {dwarf::Attribute::DW_AT_high_pc,
-                             dwarf::Attribute::DW_AT_call_file,
-                             dwarf::Attribute::DW_AT_decl_file,
-                             dwarf::Attribute::DW_AT_decl_line}},
+                             dwarf::Attribute::DW_AT_decl_line // marginally better
+                            }
+                           },
                            {dwarf::Form::DW_FORM_data2,
-                            {dwarf::Attribute::DW_AT_high_pc,
+                            {//dwarf::Attribute::DW_AT_high_pc,
                              dwarf::Attribute::DW_AT_call_file,
                              dwarf::Attribute::DW_AT_decl_file,
-                             dwarf::Attribute::DW_AT_decl_line}},
+                             dwarf::Attribute::DW_AT_decl_line
+                            }
+                           },
                            {dwarf::Form::DW_FORM_data4,
-                            {dwarf::Attribute::DW_AT_high_pc,
+                            {//dwarf::Attribute::DW_AT_high_pc,
                              dwarf::Attribute::DW_AT_call_file,
                              dwarf::Attribute::DW_AT_decl_file,
-                             dwarf::Attribute::DW_AT_decl_line}},
+                             dwarf::Attribute::DW_AT_decl_line
+                            }
+                           },
                            {dwarf::Form::DW_FORM_data8,
-                            {dwarf::Attribute::DW_AT_high_pc,
+                            {//dwarf::Attribute::DW_AT_high_pc,
                              dwarf::Attribute::DW_AT_decl_file,
                              dwarf::Attribute::DW_AT_call_file,
-                             dwarf::Attribute::DW_AT_decl_line}},
-                           {dwarf::Form::DW_FORM_addrx, {}},
-                           {dwarf::Form::DW_FORM_exprloc, {}}};
+                             dwarf::Attribute::DW_AT_decl_line
+                            }
+                           },
+                           {dwarf::Form::DW_FORM_addrx, {}},     // really needed.
+          };
+
       auto it = FormsToPartition.find(Form);
       if (it == FormsToPartition.end())
         return false;

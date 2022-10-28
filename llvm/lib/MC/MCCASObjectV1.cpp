@@ -12,7 +12,6 @@
 #include "llvm/CAS/CASID.h"
 #include "llvm/CAS/ObjectStore.h"
 #include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
-#include "llvm/DebugInfo/DWARF/DWARFTypeUnit.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugAbbrev.h"
@@ -47,6 +46,8 @@ constexpr StringLiteral PaddingRef::KindString;
   constexpr StringLiteral MCFragmentName##Ref::KindString;
 #include "llvm/MC/CAS/MCCASObjectV1.def"
 constexpr StringLiteral DebugInfoSectionRef::KindString;
+
+constexpr unsigned Dwarf4HeaderSize32Bit = 11;
 
 void MCSchema::anchor() {}
 char MCSchema::ID = 0;
@@ -1052,7 +1053,7 @@ static Expected<uint64_t> getFormSize(dwarf::Form FormVal, dwarf::FormParams FP,
 }
 
 static Error
-materializeCUDie(DWARFUnit &DCU, MutableArrayRef<char> SectionContents,
+materializeCUDie(DWARFCompileUnit &DCU, MutableArrayRef<char> SectionContents,
                  StringRef CUData, ArrayRef<char> DistinctDataArrayRef,
                  ArrayRef<uint32_t> SecOffsetVals, unsigned &SecOffsetIndex,
                  uint64_t &CUOffset, uint64_t &DistinctDataOffset,
@@ -1147,94 +1148,6 @@ materializeCUDie(DWARFUnit &DCU, MutableArrayRef<char> SectionContents,
   return Error::success();
 }
 
-namespace {
-struct HeaderInformation {
-  unsigned CopiedAmount;
-  unsigned LengthField;
-};
-} // namespace
-
-static Expected<HeaderInformation> copyHeader(SmallVectorImpl<char> &Dest,
-                                              ArrayRef<char> Data,
-                                              support::endianness Endian) {
-  BinaryStreamReader Reader(toStringRef(Data), Endian);
-  uint32_t LengthField = 0;
-  if (auto E = Reader.readInteger(LengthField))
-    return std::move(E);
-  if (LengthField >= 0xfffffff0)
-    return createStringError(inconvertibleErrorCode(),
-                             "Unsupported DWARF 64-bit format");
-  constexpr auto LengthFieldSize = 4;
-  Data = Data.drop_front(LengthFieldSize);
-
-  auto BadDataError = [] {
-    return createStringError(inconvertibleErrorCode(), "invalid data header");
-  };
-
-  auto OriginalSize = Dest.size();
-
-  if (Data.size() < LengthFieldSize)
-    return BadDataError();
-  append_range(Dest, Data.take_front(LengthFieldSize));
-
-  constexpr auto VersionFieldLength = 2;
-  if (Data.size() < VersionFieldLength)
-    return BadDataError();
-  append_range(Dest, Data.take_front(VersionFieldLength));
-  uint16_t Version = 0;
-  memcpy(&Version, &Data[0], VersionFieldLength);
-  Data = Data.drop_front(VersionFieldLength);
-  if (Version != 4 && Version != 5)
-    return BadDataError();
-
-  UnitKind UnitType = UnitKind::CU;
-  if (Version == 5) {
-    constexpr auto UnitTypeFieldLength = 1;
-    if (Data.size() < UnitTypeFieldLength)
-      return BadDataError();
-    append_range(Dest, Data.take_front(UnitTypeFieldLength));
-    uint8_t UnitTypeRaw = 0;
-    memcpy(&UnitTypeRaw, &Data[0], UnitTypeFieldLength);
-    Data = Data.drop_front(UnitTypeFieldLength);
-    auto DWARFUnitType = static_cast<dwarf::UnitType>(UnitTypeRaw);
-    assert(DWARFUnitType == dwarf::UnitType::DW_UT_compile ||
-           DWARFUnitType == dwarf::UnitType::DW_UT_type);
-    if (DWARFUnitType == dwarf::UnitType::DW_UT_type)
-      UnitType = UnitKind::TU;
-  }
-
-  constexpr auto AddrSizeAbbrevOffsetFieldLength = 5;
-  if (Data.size() < AddrSizeAbbrevOffsetFieldLength)
-    return BadDataError();
-  append_range(Dest, Data.take_front(AddrSizeAbbrevOffsetFieldLength));
-  Data = Data.drop_front(AddrSizeAbbrevOffsetFieldLength);
-
-  unsigned CopiedAmount = Dest.size() - OriginalSize;
-  return HeaderInformation{CopiedAmount, LengthField};
-}
-
-static std::unique_ptr<DWARFUnit>
-getDWARFUnit(UnitKind Kind, DWARFContext &DWARFCtx, const DWARFSection &Section,
-             const DWARFUnitHeader &Header, const DWARFDebugAbbrev *Abbrev,
-             const InMemoryCASDWARFObject &CASObj,
-             support::endianness Endianess, const DWARFUnitVector &UV) {
-  switch (Kind) {
-  case UnitKind::CU:
-    return std::make_unique<DWARFCompileUnit>(
-        DWARFCtx, Section, Header, Abbrev, &CASObj.getRangesSection(),
-        &CASObj.getLocSection(), CASObj.getStrSection(),
-        CASObj.getStrOffsetsSection(), &CASObj.getAddrSection(),
-        CASObj.getLocSection(), Endianess == support::little, false, UV);
-  case UnitKind::TU:
-    return std::make_unique<DWARFTypeUnit>(
-        DWARFCtx, Section, Header, Abbrev, &CASObj.getRangesSection(),
-        &CASObj.getLocSection(), CASObj.getStrSection(),
-        CASObj.getStrOffsetsSection(), &CASObj.getAddrSection(),
-        CASObj.getLocSection(), Endianess == support::little, false, UV);
-  }
-  llvm_unreachable("unsupported unit type");
-}
-
 Expected<uint64_t> DebugInfoSectionRef::materialize(
     MCCASReader &Reader, ArrayRef<char> AbbrevSectionContents,
     ArrayRef<uint32_t> SecOffsetVals, raw_ostream *Stream) const {
@@ -1278,14 +1191,40 @@ Expected<uint64_t> DebugInfoSectionRef::materialize(
     uint64_t CUOffset = 0;
     uint64_t SectionOffset = 0;
 
-    Expected<HeaderInformation> HeaderInfo = copyHeader(SectionData, CUData);
-    if (!HeaderInfo)
-      return HeaderInfo.takeError();
-    SectionOffset += HeaderInfo->CopiedAmount;
-    CUOffset += HeaderInfo->CopiedAmount;
-    // Add 4 bytes to the size of the SectionData because the DWARF Header
-    // length doesn't count the 4 bytes it takes to store itself.
-    SectionData.resize(HeaderInfo->LengthField + 4);
+    // Copy 11 bytes which represents the 32-bit DWARF Header for DWARF4.
+    if (CUData.size() < Dwarf4HeaderSize32Bit)
+      return createStringError(
+          inconvertibleErrorCode(),
+          "CUData is too small, it doesn't even contain a 32-bit DWARF Header");
+    SectionData.resize(Dwarf4HeaderSize32Bit);
+    memcpy(SectionData.data(), &CUData[0], Dwarf4HeaderSize32Bit);
+    SectionOffset += Dwarf4HeaderSize32Bit;
+    CUOffset += Dwarf4HeaderSize32Bit;
+
+    DWARFDataExtractor DWARFExtractor(toStringRef(SectionData),
+                                      Reader.getEndian() == support::little, 8);
+    uint64_t Offset = 0;
+    DWARFDataExtractor::Cursor C(Offset);
+    auto HeaderLength = DWARFExtractor.getRelocatedValue(C, 4);
+    auto DwarfVersion = DWARFExtractor.getRelocatedValue(C, 2);
+
+    // TODO: Add support for DWARF 5
+    if (DwarfVersion != 4)
+      return createStringError(inconvertibleErrorCode(),
+                               "Only DWARF 4 is supported right now");
+
+    // TODO: Add support for 64-bit DWARF Format
+    if (HeaderLength == 0xffffffff)
+      return createStringError(inconvertibleErrorCode(),
+                               "64-bit DWARF Format not yet supported");
+    if (HeaderLength < 0xfffffff0)
+      // Add 4 bytes to the size of the SectionData because the DWARF Header
+      // length doesn't count the 4 bytes it takes to store itself.
+      SectionData.resize(HeaderLength + 4);
+    else
+      llvm_unreachable("Unknown DWARF Format");
+    if (!C)
+      return C.takeError();
 
     DWARFSection Section = {toStringRef(SectionData), 0 /*Address*/};
     Header.extract(*DWARFCtx,
@@ -1293,14 +1232,14 @@ Expected<uint64_t> DebugInfoSectionRef::materialize(
                                       Reader.getEndian() == support::little, 8),
                    &OffsetPtr, DWARFSectionKind::DW_SECT_INFO);
     DWARFUnitVector UV;
-
-    std::unique_ptr<DWARFUnit> Unit =
-        getDWARFUnit(HeaderInfo->Kind, *DWARFCtx, Section, Header, &Abbrev,
-                     CASObj, Reader.getEndian(), UV);
-
+    DWARFCompileUnit DCU(*DWARFCtx, Section, Header, &Abbrev,
+                         &CASObj.getRangesSection(), &CASObj.getLocSection(),
+                         CASObj.getStrSection(), CASObj.getStrOffsetsSection(),
+                         &CASObj.getAddrSection(), CASObj.getLocSection(),
+                         Reader.getEndian() == support::little, false, UV);
     while (SectionOffset < SectionData.size()) {
       auto Err = materializeCUDie(
-          *Unit, SectionData, toStringRef(CUData),
+          DCU, SectionData, toStringRef(CUData),
           arrayRefFromStringRef<char>(LoadedSection->DistinctData),
           SecOffsetVals, SecOffsetIndex, CUOffset, DistinctDataOffset,
           SectionOffset);
@@ -2000,18 +1939,10 @@ getAndSetDebugAbbrevOffsetAndSkip(MutableArrayRef<char> CUData,
   if (auto E = Reader.readInteger(DwarfVersion))
     return std::move(E);
 
-  if (DwarfVersion < 4)
+  // TODO: Dwarf 5 has a different order for the next fields.
+  if (DwarfVersion != 4)
     return createStringError(inconvertibleErrorCode(),
-                             "Expected Dwarf version >= 4 input");
-
-  if (DwarfVersion == 5) {
-    uint8_t UnitType;
-    if (auto E = Reader.readInteger(UnitType))
-      return std::move(E);
-    uint8_t AddressSize;
-    if (auto E = Reader.readInteger(AddressSize))
-      return std::move(E);
-  }
+                             "Expected Dwarf 4 input");
 
   // TODO: Handle Dwarf 64 format, which uses 8 bytes.
   size_t AbbrevPosition = Reader.getOffset();
@@ -2224,11 +2155,37 @@ InMemoryCASDWARFObject::partitionCUData(ArrayRef<char> DebugInfoData,
 
   InMemoryCASDWARFObject::PartitionedDebugInfoSection PartitionedData;
   if (DWARFDie CUDie = DCU.getUnitDIE(false)) {
-    // Copy Compile Unit Header.
-    Expected<HeaderInformation> HeaderInformation =
-        copyHeader(PartitionedData.DebugInfoCURefData, DebugInfoData);
-    assert(HeaderInformation);
-    CUOffset += HeaderInformation->CopiedAmount;
+    // Copy 11 bytes which represents the 32-bit DWARF Header for DWARF4.
+    if (DebugInfoData.size() < Dwarf4HeaderSize32Bit)
+      return createStringError(inconvertibleErrorCode(),
+                               "DebugInfoData is too small, it doesn't even "
+                               "contain a 32-bit DWARF Header");
+    append_range(PartitionedData.DebugInfoCURefData,
+                 DebugInfoData.take_front(Dwarf4HeaderSize32Bit));
+    CUOffset += Dwarf4HeaderSize32Bit;
+
+    DWARFDataExtractor DWARFExtractor(
+        toStringRef(PartitionedData.DebugInfoCURefData), IsLittleEndian, 8);
+    uint64_t Offset = 0;
+    DWARFDataExtractor::Cursor C(Offset);
+    auto HeaderLength = DWARFExtractor.getRelocatedValue(C, 4);
+    auto DwarfVersion = DWARFExtractor.getRelocatedValue(C, 2);
+
+    // TODO: Add support for DWARF 5
+    if (DwarfVersion != 4)
+      return createStringError(inconvertibleErrorCode(),
+                               "Only DWARF 4 is supported right now");
+
+    // TODO: Add support for 64-bit DWARF Format
+    if (HeaderLength == 0xffffffff)
+      return createStringError(inconvertibleErrorCode(),
+                               "64-bit DWARF Format not yet supported");
+    if (HeaderLength >= 0xfffffff0)
+      llvm_unreachable("Unknown DWARF Format");
+
+    if (!C)
+      return C.takeError();
+
     partitionCUDie(PartitionedData, CUDie, DebugInfoData, CUOffset,
                    IsLittleEndian, DCU.getAddressByteSize());
   }

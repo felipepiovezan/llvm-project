@@ -169,6 +169,7 @@ Error MCSchema::fillCache() {
       PaddingRef::KindString,
       MCAssemblerRef::KindString,
       DebugInfoSectionRef::KindString,
+      DIEDataRef::KindString,
 #define CASV1_SIMPLE_DATA_REF(RefName, IdentifierName) RefName::KindString,
 #define CASV1_SIMPLE_GROUP_REF(RefName, IdentifierName) RefName::KindString,
 #define MCFRAGMENT_NODE_REF(MCFragmentName, MCEnumName, MCEnumIdentifier)      \
@@ -2502,6 +2503,9 @@ Expected<uint64_t> MCCASReader::materializeGroup(cas::ObjectRef ID) {
     return F->materialize(*this);
   if (auto F = DebugAbbrevSectionRef::Cast(*Node))
     return F->materialize(*this);
+  // Transition period: ignore DIE nodes.
+  if (DIETopLevelRef::Cast(*Node))
+    return 0;
   return createStringError(inconvertibleErrorCode(),
                            "unsupported CAS node for group");
 }
@@ -2550,4 +2554,33 @@ Expected<uint64_t> MCCASReader::materializeAtom(cas::ObjectRef ID,
 
   return createStringError(inconvertibleErrorCode(),
                            "unsupported CAS node for fragment");
+}
+
+Expected<DIEAbbrevSetRef>
+DIEAbbrevSetRef::create(MCCASBuilder &MB, ArrayRef<cas::ObjectRef> Abbrevs) {
+  Expected<Builder> B = Builder::startNode(MB.Schema, KindString);
+  if (!B)
+    return B.takeError();
+  append_range(B->Refs, Abbrevs);
+  return get(B->build());
+}
+
+Expected<DIETopLevelRef>
+DIETopLevelRef::create(MCCASBuilder &MB, ArrayRef<cas::ObjectRef> Children) {
+  Expected<Builder> B = Builder::startNode(MB.Schema, KindString);
+  if (!B)
+    return B.takeError();
+  append_range(B->Refs, Children);
+  return get(B->build());
+}
+
+Expected<DIEDataRef> DIEDataRef::create(MCCASBuilder &MB,
+                                        ArrayRef<cas::ObjectRef> Children,
+                                        ArrayRef<char> Contents) {
+  Expected<Builder> B = Builder::startNode(MB.Schema, KindString);
+  if (!B)
+    return B.takeError();
+  append_range(B->Refs, Children);
+  append_range(B->Data, toStringRef(Contents));
+  return get(B->build());
 }

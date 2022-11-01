@@ -2731,3 +2731,16 @@ Expected<uint64_t> MCCASReader::materializeAtom(cas::ObjectRef ID,
   return createStringError(inconvertibleErrorCode(),
                            "unsupported CAS node for fragment");
 }
+
+Expected<DIERef> DIERef::create(MCCASBuilder &MB,
+                                ArrayRef<cas::ObjectRef> ChildrenDIERefs,
+                                ArrayRef<char> Contents) {
+  Expected<Builder> B = Builder::startNode(MB.Schema, KindString);
+  if (!B)
+    return B.takeError();
+
+  append_range(B->Refs, ChildrenDIERefs);
+  writeRelocationsAndAddends(MB.getSectionRelocs(), MB.getSectionAddends(),
+                             B->Data);
+  return get(B->build());
+}

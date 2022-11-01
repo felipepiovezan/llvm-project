@@ -641,6 +641,40 @@ private:
   explicit DebugInfoSectionRef(SpecificRefT Ref) : SpecificRefT(Ref) {}
 };
 
+class DIERef : public SpecificRef<DIERef> {
+  using SpecificRefT = SpecificRef<DIERef>;
+  friend class SpecificRef<DIERef>;
+
+public:
+  static constexpr StringLiteral KindString = "mc:debug_DIE";
+  static Expected<DIERef> create(MCCASBuilder &MB,
+                                 ArrayRef<cas::ObjectRef> Children,
+                                 ArrayRef<char> Contents);
+
+  static Expected<DIERef> get(Expected<MCObjectProxy> Ref) {
+    auto Specific = SpecificRefT::getSpecific(std::move(Ref));
+    if (!Specific)
+      return Specific.takeError();
+    return DIERef(*Specific);
+  }
+  static Expected<DIERef> get(const MCSchema &Schema, cas::ObjectRef ID) {
+    return get(Schema.get(ID));
+  }
+  static Optional<DIERef> Cast(MCObjectProxy Ref) {
+    auto Specific = SpecificRefT::Cast(Ref);
+    if (!Specific)
+      return None;
+    return DIERef(*Specific);
+  }
+  Expected<uint64_t> materialize(MCCASReader &Reader,
+                                 ArrayRef<char> AbbrevSectionContents,
+                                 ArrayRef<uint32_t> SecOffsetVals,
+                                 raw_ostream *Stream = nullptr) const;
+
+private:
+  explicit DIERef(SpecificRefT Ref) : SpecificRefT(Ref) {}
+};
+
 } // namespace v1
 } // namespace mccasformats
 } // namespace llvm

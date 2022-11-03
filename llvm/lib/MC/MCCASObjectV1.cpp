@@ -22,6 +22,7 @@
 #include "llvm/Support/BinaryStreamWriter.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/EndianStream.h"
+#include "llvm/Support/LEB128.h"
 #include <memory>
 
 // FIXME: Fix dependency here.
@@ -1019,6 +1020,79 @@ static Expected<uint64_t> getFormSize(dwarf::Form FormVal, dwarf::FormParams FP,
   return FormSize;
 }
 
+// Helper class to read DWARF data.
+struct DwarfDataReader {
+  DWARFDataExtractor Extractor;
+
+  DwarfDataReader(StringRef Input, bool IsLittleEndian, uint8_t AddressSize)
+      : Extractor(Input, IsLittleEndian, AddressSize) {}
+
+  /// Reads an ULEB128-encoded integer at `Offset`, incrementing `Offset` by
+  /// the number of bytes read if successful.
+  Expected<uint64_t> readULEB128AndAdvanceOffset(uint64_t &Offset) {
+    Error Err = Error::success();
+    auto Value = Extractor.getULEB128(&Offset, &Err);
+    if (Err)
+      return Err;
+    return Value;
+  }
+
+  /// Reads a byte at `Offset`, incrementing `Offset` by 1 if successful.
+  Expected<uint8_t> readByteAndAdvanceOffset(uint64_t &Offset) {
+    Error Err = Error::success();
+    auto Value = Extractor.getU8(&Offset, &Err);
+    if (Err)
+      return Err;
+    return Value;
+  }
+
+  /// Reads `Length` bytes of data at `Offset`.
+  Expected<StringRef> readData(uint64_t Offset, uint64_t Length) {
+    Error Err = Error::success();
+    StringRef Data = Extractor.getBytes(&Offset, Length, &Err);
+    if (Err)
+      return Err;
+    return Data;
+  }
+};
+
+// Helper class to copy DWARF data to an output vector.
+struct DwarfDataCopier {
+  DwarfDataReader InputReader;
+  raw_svector_ostream OutputStream;
+
+  DwarfDataCopier(StringRef Input, SmallVectorImpl<char> &Output,
+                  bool IsLittleEndian, uint8_t AddressSize)
+      : InputReader(Input, IsLittleEndian, AddressSize), OutputStream(Output) {}
+
+  /// Copies an ULEB128-encoded integer at `Offset`, incrementing `Offset` by
+  /// the number of bytes read if successful.
+  Expected<uint64_t> copyULEB128AndAdvanceOffset(uint64_t &Offset) {
+    Expected<uint64_t> Value = InputReader.readULEB128AndAdvanceOffset(Offset);
+    if (!Value)
+      return Value.takeError();
+    encodeULEB128(*Value, OutputStream);
+    return Value;
+  }
+
+  /// Copies `Length` bytes of data at `Offset`.
+  Error copyData(uint64_t Offset, uint64_t Length) {
+    Expected<StringRef> Data = InputReader.readData(Offset, Length);
+    if (!Data)
+      return Data.takeError();
+    OutputStream.write(Data->data(), Length);
+    return Error::success();
+  }
+
+  /// Writes `Value` as an ULEB-encoded integer to the output stream. Does not
+  /// read from the underlying input stream.
+  void writeULEB128(uint64_t Value) { encodeULEB128(Value, OutputStream); }
+
+  /// Writes `Value` to the output stream. Does not read from the underlying
+  /// input stream.
+  void writeByte(uint8_t Value) { OutputStream.write(Value); }
+};
+
 static Error
 materializeCUDie(DWARFCompileUnit &DCU, MutableArrayRef<char> SectionContents,
                  StringRef CUData, ArrayRef<char> DistinctDataArrayRef,
@@ -1026,36 +1100,63 @@ materializeCUDie(DWARFCompileUnit &DCU, MutableArrayRef<char> SectionContents,
                  uint64_t &CUOffset, uint64_t &DistinctDataOffset,
                  uint64_t &SectionOffset) {
   // Copy Abbrev Tag.
-  DWARFDataExtractor DWARFExtractor(CUData, DCU.isLittleEndian(),
-                                    DCU.getAddressByteSize());
-  uint64_t PrevOffset = CUOffset;
-  Error Err = Error::success();
-  uint64_t AbbrevTag = DWARFExtractor.getULEB128(&CUOffset, &Err);
-  if (Err)
-    return Err;
-  std::memcpy(&SectionContents[SectionOffset], CUData.data() + PrevOffset,
-              CUOffset - PrevOffset);
-  SectionOffset += CUOffset - PrevOffset;
+  DwarfDataReader DistinctDataReader(toStringRef(DistinctDataArrayRef),
+                                     DCU.isLittleEndian(),
+                                     DCU.getAddressByteSize());
+  Expected<uint64_t> AbbrevTag =
+      DistinctDataReader.readULEB128AndAdvanceOffset(DistinctDataOffset);
+  if (!AbbrevTag)
+    return AbbrevTag.takeError();
 
-  // Return if the abbrev tag is 0, this indicates the end of a sequence of
-  // children DWARFDies
-  if (AbbrevTag == 0)
+  SectionOffset += encodeULEB128(
+      *AbbrevTag, reinterpret_cast<uint8_t *>(&SectionContents[SectionOffset]));
+
+  // An abbrev tag == 0 indicates the end of a sequence of children DWARF DIEs.
+  if (*AbbrevTag == 0)
     return Error::success();
 
   // Create a empty DWARFDie to extract the attributes.
   DWARFDebugInfoEntry DDIE;
   auto *AbbrevDecl =
-      DCU.getAbbreviations()->getAbbreviationDeclaration(AbbrevTag);
+      DCU.getAbbreviations()->getAbbreviationDeclaration(*AbbrevTag);
   assert(AbbrevDecl && "AbbrevDecl not found!");
   DDIE.setAbbrevDecl(AbbrevDecl);
   DWARFDie CUDie(&DCU, &DDIE);
 
-  // Loop over all attributes in a compile unit die, read the data from the
-  // DistinctDataArrayRef or read it from the CUData, depending on the form,
-  // write this to a final buffer that represents the compile unit in an object
-  // file.
-  for (unsigned I = 0; I < AbbrevDecl->getNumAttributes(); I++) {
-    auto Form = AbbrevDecl->getFormByIndex(I);
+  DwarfDataReader CUReader(CUData, DCU.isLittleEndian(),
+                           DCU.getAddressByteSize());
+  Expected<uint64_t> DIETag = CUReader.readULEB128AndAdvanceOffset(CUOffset);
+  if (!DIETag)
+    return DIETag.takeError();
+  assert(AbbrevDecl->getTag() == *DIETag);
+
+  Expected<uint8_t> HasChildren = CUReader.readByteAndAdvanceOffset(CUOffset);
+  if (!HasChildren)
+    return HasChildren.takeError();
+  assert(AbbrevDecl->hasChildren() == *HasChildren);
+
+  unsigned AttrIdx = 0;
+  while (true) {
+    Expected<uint64_t> AttrAsInteger =
+        CUReader.readULEB128AndAdvanceOffset(CUOffset);
+    if (!AttrAsInteger)
+      return AttrAsInteger.takeError();
+    // The list of attributes is terminated by a zero.
+    if (*AttrAsInteger == 0)
+      break;
+
+    auto Attr = static_cast<dwarf::Attribute>(*AttrAsInteger);
+    assert(Attr == AbbrevDecl->getAttrByIndex(AttrIdx));
+
+    Expected<uint64_t> FormAsInteger =
+        CUReader.readULEB128AndAdvanceOffset(CUOffset);
+    if (!FormAsInteger)
+      return FormAsInteger.takeError();
+
+    auto Form = static_cast<dwarf::Form>(*FormAsInteger);
+    assert(Form == AbbrevDecl->getFormByIndex(AttrIdx));
+    AttrIdx++;
+
     auto *U = CUDie.getDwarfUnit();
     dwarf::FormParams FP = U->getFormParams();
     bool FormInDistinctDataRef = is_contained(
@@ -1087,7 +1188,7 @@ materializeCUDie(DWARFCompileUnit &DCU, MutableArrayRef<char> SectionContents,
       memcpy(&SectionContents[SectionOffset],
              &DistinctDataArrayRef[DistinctDataOffset], *FormSize);
       DistinctDataOffset += *FormSize;
-    } else if (AbbrevDecl->getAttrByIndex(I) == llvm::dwarf::DW_AT_stmt_list) {
+    } else if (Attr == llvm::dwarf::DW_AT_stmt_list) {
       memcpy(&SectionContents[SectionOffset], &SecOffsetVals[SecOffsetIndex],
              *FormSize);
       assert(SecOffsetVals.size() != 0 &&
@@ -2062,41 +2163,66 @@ DebugAbbrevOffsetsRefAdaptor::encodeOffsets(ArrayRef<size_t> Offsets) {
   return EncodedOffsets;
 }
 
-static void partitionCUDie(
+static Error partitionCUDie(
     InMemoryCASDWARFObject::PartitionedDebugInfoSection &PartitionedData,
     DWARFDie &CUDie, ArrayRef<char> DebugInfoData, uint64_t &CUOffset,
     bool IsLittleEndian, uint8_t AddressSize) {
 
-  // Copy Abbrev Tag
-  DWARFDataExtractor DWARFExtractor(toStringRef(DebugInfoData), IsLittleEndian,
-                                    AddressSize);
-  auto PrevOffset = CUOffset;
-  DWARFExtractor.getULEB128(&CUOffset);
-  auto Size = CUOffset - PrevOffset;
-  append_range(PartitionedData.DebugInfoCURefData,
-               DebugInfoData.slice(PrevOffset, Size));
+  DwarfDataCopier CopierToDistinctData{toStringRef(DebugInfoData),
+                                       PartitionedData.DistinctData,
+                                       IsLittleEndian, AddressSize};
+
+  // Copy Abbrev Tag. TODO: not needed once we reconstruct the abbreviation
+  // table from the data in the CU.
+  Expected<uint64_t> AbbrevTag =
+      CopierToDistinctData.copyULEB128AndAdvanceOffset(CUOffset);
+  if (!AbbrevTag)
+    return AbbrevTag.takeError();
+
+  if (CUDie.getAbbreviationDeclarationPtr() == nullptr) {
+    assert(*AbbrevTag == 0);
+    assert(PartitionedData.DistinctData.back() == 0);
+    return Error::success();
+  }
+
+  assert(*AbbrevTag != 0);
+
+  DwarfDataCopier CopierToCUData{toStringRef(DebugInfoData),
+                                 PartitionedData.DebugInfoCURefData,
+                                 IsLittleEndian, AddressSize};
+  CopierToCUData.writeULEB128(CUDie.getTag());
+  CopierToCUData.writeByte(CUDie.hasChildren());
+
   for (const DWARFAttribute &AttrValue : CUDie.attributes()) {
+    CopierToCUData.writeULEB128(AttrValue.Attr);
+    CopierToCUData.writeULEB128(AttrValue.Value.getForm());
+    assert(AttrValue.Offset == CUOffset);
+
     if (is_contained(InMemoryCASDWARFObject::PartitionedDebugInfoSection::
                          FormsToPartition,
-                     AttrValue.Value.getForm()))
+                     AttrValue.Value.getForm())) {
       append_range(PartitionedData.DistinctData,
                    DebugInfoData.slice(AttrValue.Offset, AttrValue.ByteSize));
-    else if (AttrValue.Attr != llvm::dwarf::DW_AT_stmt_list)
-      append_range(PartitionedData.DebugInfoCURefData,
-                   DebugInfoData.slice(AttrValue.Offset, AttrValue.ByteSize));
+    } else if (AttrValue.Attr != llvm::dwarf::DW_AT_stmt_list) {
+      if (Error Err = CopierToCUData.copyData(CUOffset, AttrValue.ByteSize))
+        return Err;
+    }
+
     CUOffset += AttrValue.ByteSize;
   }
 
-  DWARFDie Child = CUDie.getFirstChild();
-  while (Child && Child.getAbbreviationDeclarationPtr()) {
-    partitionCUDie(PartitionedData, Child, DebugInfoData, CUOffset,
-                   IsLittleEndian, AddressSize);
-    Child = Child.getSibling();
+  // End list of attributes with a 0 marker.
+  CopierToCUData.writeULEB128(0);
+
+  DWARFDie DirectChild = CUDie.getFirstChild();
+  while (DirectChild) {
+    if (auto Err = partitionCUDie(PartitionedData, DirectChild, DebugInfoData,
+                                  CUOffset, IsLittleEndian, AddressSize))
+      return Err;
+    DirectChild = DirectChild.getSibling();
   }
-  if (Child && !Child.getAbbreviationDeclarationPtr()) {
-    PartitionedData.DebugInfoCURefData.push_back(DebugInfoData[CUOffset]);
-    CUOffset++;
-  }
+
+  return Error::success();
 }
 
 Expected<InMemoryCASDWARFObject::PartitionedDebugInfoSection>
@@ -2153,8 +2279,9 @@ InMemoryCASDWARFObject::partitionCUData(ArrayRef<char> DebugInfoData,
     if (!C)
       return C.takeError();
 
-    partitionCUDie(PartitionedData, CUDie, DebugInfoData, CUOffset,
-                   IsLittleEndian, DCU.getAddressByteSize());
+    if (auto E = partitionCUDie(PartitionedData, CUDie, DebugInfoData, CUOffset,
+                                IsLittleEndian, DCU.getAddressByteSize()))
+      return E;
   }
   return PartitionedData;
 }

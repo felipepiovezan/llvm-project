@@ -23,6 +23,7 @@
 #include "llvm/Support/BinaryStreamWriter.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/EndianStream.h"
+#include "llvm/Support/LEB128.h"
 #include <memory>
 
 // FIXME: Fix dependency here.
@@ -60,6 +61,10 @@ cl::opt<unsigned>
 cl::opt<bool> SplitStringSections(
     "mc-cas-split-string-sections",
     cl::desc("Split String Sections (SymTable and DebugStr)"), cl::init(true));
+
+cl::opt<bool> CreateDIEBlocks(
+    "mc-cas-create-die-blocks",
+    cl::desc("Create the new experimental DIE blocks"), cl::init(false));
 
 enum RelEncodeLoc {
   Atom,
@@ -110,7 +115,7 @@ public:
   /// unit.
   Expected<PartitionedDebugInfoSection>
   partitionCUData(ArrayRef<char> DebugInfoData, uint64_t AbbrevOffset,
-                  uint64_t CUOffset, DWARFContext *Ctx);
+                  uint64_t CUOffset, DWARFContext *Ctx, MCCASBuilder &Builder);
 };
 
 struct CUInfo {
@@ -169,6 +174,7 @@ Error MCSchema::fillCache() {
       PaddingRef::KindString,
       MCAssemblerRef::KindString,
       DebugInfoSectionRef::KindString,
+      DIERef::KindString,
 #define CASV1_SIMPLE_DATA_REF(RefName, IdentifierName) RefName::KindString,
 #define CASV1_SIMPLE_GROUP_REF(RefName, IdentifierName) RefName::KindString,
 #define MCFRAGMENT_NODE_REF(MCFragmentName, MCEnumName, MCEnumIdentifier)      \
@@ -1919,10 +1925,29 @@ static void partitionCUDie(
   }
 }
 
+struct DIEDataWriter;
+
+struct DIERefCreator {
+  DIERefCreator(SmallVectorImpl<char> &DistinctData,
+                ArrayRef<char> DebugInfoData, MCCASBuilder &CASBuilder)
+      : DistinctData(DistinctData), DebugInfoData(DebugInfoData),
+        CASBuilder(CASBuilder) {}
+
+  Expected<DIERef> encodeDIE(DWARFDie DIE);
+
+private:
+  SmallVectorImpl<char> &DistinctData;
+  ArrayRef<char> DebugInfoData;
+  MCCASBuilder &CASBuilder;
+
+  Error encodeDIE(DWARFDie &DIE, DIEDataWriter &Encoder);
+};
+
 Expected<InMemoryCASDWARFObject::PartitionedDebugInfoSection>
 InMemoryCASDWARFObject::partitionCUData(ArrayRef<char> DebugInfoData,
                                         uint64_t AbbrevOffset,
-                                        uint64_t CUOffset, DWARFContext *Ctx) {
+                                        uint64_t CUOffset, DWARFContext *Ctx,
+                                        MCCASBuilder &Builder) {
 
   StringRef AbbrevSectionContribution =
       getAbbrevSection().drop_front(AbbrevOffset);
@@ -1942,6 +1967,15 @@ InMemoryCASDWARFObject::partitionCUData(ArrayRef<char> DebugInfoData,
 
   InMemoryCASDWARFObject::PartitionedDebugInfoSection PartitionedData;
   if (DWARFDie CUDie = DCU.getUnitDIE(false)) {
+    if (CreateDIEBlocks) {
+      // Transition period between approaches: ignore distinct data.
+      SmallVector<char> DistinctData;
+      Expected<DIERef> Node =
+          DIERefCreator(DistinctData, DebugInfoData, Builder).encodeDIE(CUDie);
+      if (!Node)
+        return Node.takeError();
+      Builder.addNode(*Node);
+    }
     // Copy 11 bytes which represents the 32-bit DWARF Header for DWARF4.
     if (DebugInfoData.size() < Dwarf4HeaderSize32Bit)
       return createStringError(inconvertibleErrorCode(),
@@ -2019,7 +2053,7 @@ Expected<AbbrevAndDebugSplit> MCCASBuilder::splitDebugInfoAndAbbrevSections() {
        llvm::zip(SplitInfo->SplitCUData, SplitInfo->AbbrevOffsets)) {
     uint64_t CUOffset = 0;
     auto PartitionedData =
-        CASObj.partitionCUData(CUData, AbbrevOffset, CUOffset, DWARFCtx);
+        CASObj.partitionCUData(CUData, AbbrevOffset, CUOffset, DWARFCtx, *this);
     if (!PartitionedData)
       return PartitionedData.takeError();
     DistinctData.append(PartitionedData->DistinctData.begin(),
@@ -2502,6 +2536,9 @@ Expected<uint64_t> MCCASReader::materializeGroup(cas::ObjectRef ID) {
     return F->materialize(*this);
   if (auto F = DebugAbbrevSectionRef::Cast(*Node))
     return F->materialize(*this);
+  // Transition period: ignore DIERefs.
+  if (DIERef::Cast(*Node))
+    return 0;
   return createStringError(inconvertibleErrorCode(),
                            "unsupported CAS node for group");
 }
@@ -2564,4 +2601,120 @@ Expected<DIERef> DIERef::create(MCCASBuilder &MB,
   writeRelocationsAndAddends(MB.getSectionRelocs(), MB.getSectionAddends(),
                              B->Data);
   return get(B->build());
+}
+
+// Helper class for creating a DIERef.
+struct DIEDataWriter {
+  DIEDataWriter(SmallVectorImpl<char> &DistinctData)
+      : Data(), DataStream(Data), DistinctDataStream(DistinctData) {}
+
+  /// Write ULEB128(V) to the main data stream.
+  void writeULEB128(uint64_t V) { encodeULEB128(V, DataStream); }
+
+  /// Write V to the main data stream.
+  void writeByte(uint8_t V) { DataStream << V; }
+
+  /// Write the contents of V to the main data stream.
+  void writeData(ArrayRef<char> V) { DataStream.write(V.data(), V.size()); }
+
+  /// Write the contents of V to the distinct data stream.
+  void writeDistinctData(ArrayRef<char> V) {
+    DistinctDataStream.write(V.data(), V.size());
+  }
+
+  /// Add `CASObj` to the list of children of the DIE being created.
+  void addRef(DIERef CASObj) { Children.push_back(CASObj.getRef()); }
+
+  /// Saves the main data stream and any children to a new DIERef node.
+  Expected<DIERef> getCASNode(MCCASBuilder &CASBuilder) const {
+    return DIERef::create(CASBuilder, Children, Data);
+  }
+
+private:
+  SmallVector<char> Data;
+  raw_svector_ostream DataStream;
+  raw_svector_ostream DistinctDataStream;
+  SmallVector<cas::ObjectRef> Children;
+};
+
+// Returns true if a DIE whose tag is `Tag` should be placed in a separate CAS
+// block.
+static bool shouldCreateSeparateBlockFor(DWARFDie &DIE) {
+  dwarf::Tag Tag = DIE.getTag();
+  if (!is_contained({dwarf::Tag::DW_TAG_subprogram}, Tag))
+    return false;
+
+  for (const DWARFAttribute &AttrValue : DIE.attributes())
+    if (AttrValue.Attr == dwarf::Attribute::DW_AT_low_pc)
+      return true;
+  return false;
+}
+
+// Writes a pair [TAG, has_children] to the DIE data streams.
+void encodeDIEHeader(DWARFDie &DIE, DIEDataWriter &Writer) {
+  Writer.writeULEB128(DIE.getTag());
+  Writer.writeByte(DIE.hasChildren());
+}
+
+// Writes tuples of [Attr, Form, Data] to the DIE data streams.
+// The list of tuples is terminated by a single zero.
+void encodeDIEAttrs(DWARFDie &DIE, DIEDataWriter &Writer,
+                    ArrayRef<char> DebugInfoData) {
+  for (const DWARFAttribute &AttrValue : DIE.attributes()) {
+    dwarf::Attribute Attr = AttrValue.Attr;
+    dwarf::Form Form = AttrValue.Value.getForm();
+    ArrayRef<char> FormData =
+        DebugInfoData.slice(AttrValue.Offset, AttrValue.ByteSize);
+    Writer.writeULEB128(Attr);
+    Writer.writeULEB128(Form);
+    if (doesntDedup(Form, Attr))
+      Writer.writeDistinctData(FormData);
+    else
+      Writer.writeData(FormData);
+  }
+  Writer.writeByte(0);
+}
+
+// Serializes DIE and all its children using Writer.
+// The following format is used:
+//   [DIE.Tag, DIE.has_children?]
+//   [DIE.Attr, DIE.Form, DIE.Form.Data]*
+//   [0]
+//   If DIE.has_children?:
+//      [serializes all children]
+//      [0]
+// This handles splitting all information into the appropriate streams, as well
+// as creating new CAS blocks as needed.
+// FIXME: don't use recursion.
+Error DIERefCreator::encodeDIE(DWARFDie &DIE, DIEDataWriter &Writer) {
+  encodeDIEHeader(DIE, Writer);
+  encodeDIEAttrs(DIE, Writer, DebugInfoData);
+
+  DWARFDie Child = DIE.getFirstChild();
+  while (Child) {
+    dwarf::Tag ChildTag = Child.getTag();
+    if (ChildTag == dwarf::Tag::DW_TAG_null) {
+      Writer.writeByte(0);
+      break;
+    }
+
+    if (shouldCreateSeparateBlockFor(Child)) {
+      Writer.writeULEB128(getTagForDIEInAnotherBlock());
+      auto MaybeNode = encodeDIE(Child);
+      if (!MaybeNode)
+        return MaybeNode.takeError();
+      Writer.addRef(*MaybeNode);
+    } else if (auto E = encodeDIE(Child, Writer))
+      return E;
+    Child = Child.getSibling();
+  }
+  return Error::success();
+}
+
+Expected<DIERef> DIERefCreator::encodeDIE(DWARFDie DIE) {
+  DIEDataWriter Writer(DistinctData);
+  if (auto E = encodeDIE(DIE, Writer))
+    return E;
+  auto MaybeNode = Writer.getCASNode(CASBuilder);
+  return MaybeNode;
 }

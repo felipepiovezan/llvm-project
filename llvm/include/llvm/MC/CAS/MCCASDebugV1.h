@@ -25,6 +25,11 @@ bool doesntDedup(dwarf::Form Form, dwarf::Attribute Attr);
 Expected<uint64_t> getFormSize(dwarf::Form Form, dwarf::FormParams FP,
                                StringRef CUData, uint64_t CUOffset,
                                bool IsLittleEndian, uint8_t AddressSize);
+
+/// A special value to indicate that a DIE has been placed in a separate CAS
+/// block.
+/// This should not conflict with any DWARF Tag values.
+inline uint16_t getTagForDIEInAnotherBlock() { return 0xf0f0; }
 } // namespace v1
 } // namespace mccasformats
 } // namespace llvm

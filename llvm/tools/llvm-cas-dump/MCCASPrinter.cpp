@@ -9,6 +9,7 @@
 #include "MCCASPrinter.h"
 #include "CASDWARFObject.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/MC/CAS/MCCASDebugV1.h"
 #include "llvm/Support/DataExtractor.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -134,6 +135,150 @@ static Error printAbbrevOffsets(raw_ostream &OS,
   return Error::success();
 }
 
+Error MCCASPrinter::printDIEAttrs(BinaryStreamReader &Reader,
+                                  StringRef DIEData) {
+  constexpr auto IsLittleEndian = true;
+  constexpr auto AddrSize = 8;
+  constexpr auto FormParams =
+      dwarf::FormParams{4 /*Version*/, AddrSize, dwarf::DwarfFormat::DWARF32};
+
+  while (true) {
+    uint64_t AttrAsInt;
+    if (auto E = Reader.readULEB128(AttrAsInt))
+      return E;
+    if (AttrAsInt == 0)
+      break;
+    auto Attr = static_cast<dwarf::Attribute>(AttrAsInt);
+
+    uint64_t FormAsInt;
+    if (auto E = Reader.readULEB128(FormAsInt))
+      return E;
+    auto Form = static_cast<dwarf::Form>(FormAsInt);
+
+    OS.indent(Indent);
+    OS << formatv("{0, -30} {1, -25} ", dwarf::AttributeString(Attr),
+                  dwarf::FormEncodingString(Form));
+
+    if (doesntDedup(Form, Attr)) {
+      OS << "<data in separate block>\n";
+      continue;
+    }
+
+    Expected<uint64_t> FormSize =
+        getFormSize(Form, FormParams, DIEData, Reader.getOffset(),
+                    IsLittleEndian, AddrSize);
+    if (!FormSize)
+      return FormSize.takeError();
+
+    ArrayRef<uint8_t> RawBytes;
+    if (auto E = Reader.readArray(RawBytes, *FormSize))
+      return E;
+    OS << '[';
+    llvm::interleave(
+        RawBytes, OS, [&](uint8_t Char) { OS << utohexstr(Char); }, " ");
+    OS << "]\n";
+  }
+  return Error::success();
+}
+
+static Expected<dwarf::Tag> readTag(BinaryStreamReader &Reader) {
+  uint64_t TagAsInt;
+  if (auto E = Reader.readULEB128(TagAsInt))
+    return E;
+  return static_cast<dwarf::Tag>(TagAsInt);
+}
+
+static Expected<bool> readHasChildren(BinaryStreamReader &Reader) {
+  char HasChildren;
+  if (auto E = Reader.readInteger(HasChildren))
+    return E;
+  return HasChildren;
+}
+
+Error MCCASPrinter::printDIERef(BinaryStreamReader &Reader,
+                                dwarf::Tag Tag,
+                                StringRef DIEData,
+                                ArrayRef<DIERef> &CASChildrenStack) {
+  Expected<bool> MaybeHasChildren = readHasChildren(Reader);
+  if (!MaybeHasChildren)
+    return MaybeHasChildren.takeError();
+  bool HasChildren = *MaybeHasChildren;
+
+  IndentGuard Guard(Indent);
+  if (auto E = printDIEAttrs(Reader, DIEData))
+    return E;
+
+  if (!HasChildren)
+    return Error::success();
+
+  while (true) {
+    Expected<dwarf::Tag> MaybeChildTag = readTag(Reader);
+    if (!MaybeChildTag)
+      return MaybeChildTag.takeError();
+
+    dwarf::Tag ChildTag = *MaybeChildTag;
+    if (ChildTag == dwarf::Tag::DW_TAG_null)
+      break;
+
+    if (ChildTag == getTagForDIEInAnotherBlock()) {
+      if (auto E = printDIERef(CASChildrenStack.front()))
+        return E;
+      CASChildrenStack = CASChildrenStack.drop_front();
+      continue;
+    }
+
+    OS.indent(Indent);
+    OS << dwarf::TagString(ChildTag) << "\n";
+
+    if (auto E = printDIERef(Reader, ChildTag, DIEData, CASChildrenStack))
+      return E;
+  }
+
+  return Error::success();
+}
+
+Expected<SmallVector<DIERef>> loadAllChildren(DIERef DIE) {
+  SmallVector<DIERef> Children;
+  const MCSchema &Schema = DIE.getSchema();
+  auto LoadRef = [&](ObjectRef Obj) -> Error {
+    auto MaybeLoaded = Schema.get(Obj);
+    if (!MaybeLoaded)
+      return MaybeLoaded.takeError();
+    if (auto DIEChild = DIERef::Cast(*MaybeLoaded)) {
+      Children.push_back(*DIEChild);
+      return Error::success();
+    }
+    return createStringError(inconvertibleErrorCode(),
+                             "Expected DIERef as child");
+  };
+  if (auto E = DIE.forEachReference(LoadRef))
+    return E;
+  return Children;
+}
+
+Error MCCASPrinter::printDIERef(DIERef Ref) {
+  StringRef DIEData = Ref.getData();
+  BinaryStreamReader Reader(DIEData, support::endianness::little);
+  Expected<SmallVector<DIERef>> MaybeChildren = loadAllChildren(Ref);
+  if (!MaybeChildren)
+    return MaybeChildren.takeError();
+  ArrayRef<DIERef> ChildrenRefs = *MaybeChildren;
+
+  Expected<dwarf::Tag> MaybeTag = readTag(Reader);
+  if (!MaybeTag)
+    return MaybeTag.takeError();
+
+  // The tag of a fresh block must be meaningful, otherwise we wouldn't have
+  // made a new block.
+  assert(*MaybeTag != dwarf::Tag::DW_TAG_null &&
+         *MaybeTag != getTagForDIEInAnotherBlock());
+
+  OS.indent(Indent);
+  OS << dwarf::TagString(*MaybeTag) << " " << Ref.getID().toString() << "\n";
+
+  return printDIERef(Reader, *MaybeTag, DIEData, ChildrenRefs);
+}
+
 Error MCCASPrinter::printSimpleNested(MCObjectProxy Ref, CASDWARFObject &Obj,
                                       DWARFContext *DWARFCtx) {
   IndentGuard Guard(Indent);
@@ -142,6 +287,9 @@ Error MCCASPrinter::printSimpleNested(MCObjectProxy Ref, CASDWARFObject &Obj,
       Options.DebugAbbrevOffsets && AbbrevOffsetsRef)
     if (auto E = printAbbrevOffsets(OS, *AbbrevOffsetsRef))
       return E;
+
+  if (auto DIE = DIERef::Cast(Ref); Options.DIERefs && DIE)
+    return printDIERef(*DIE);
 
   return Ref.forEachReference(
       [&](ObjectRef CASObj) { return printMCObject(CASObj, Obj, DWARFCtx); });

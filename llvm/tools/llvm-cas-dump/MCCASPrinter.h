@@ -28,6 +28,7 @@ struct PrinterOptions {
   bool HexDumpOneLine = false;
   bool ShowForm = false;
   bool Verbose = false;
+  bool DIERefs = false;
 };
 
 struct MCCASPrinter {
@@ -58,6 +59,11 @@ private:
 
   Error printSimpleNested(MCObjectProxy AssemblerRef, CASDWARFObject &Obj,
                           DWARFContext *DWARFCtx);
+
+  Error printDIERef(DIERef Ref);
+  Error printDIERef(BinaryStreamReader &Reader, dwarf::Tag Tag,
+                    StringRef DIEData, ArrayRef<DIERef> &CASChildrenStack);
+  Error printDIEAttrs(BinaryStreamReader &Reader, StringRef DIEData);
 };
 } // namespace v1
 } // namespace mccasformats

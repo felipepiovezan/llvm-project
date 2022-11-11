@@ -42,6 +42,8 @@ cl::opt<bool>
     ShowForm("show-form",
              cl::desc("Print out the DW_FORMs in the dwarfdump output"));
 cl::opt<bool> Verbose("v", cl::desc("Enable verbse output in the dwarfdump"));
+cl::opt<bool> DIERefs("die-refs",
+                      cl::desc("Print out the DIERef block structure"));
 
 namespace {
 
@@ -67,8 +69,9 @@ int main(int argc, char *argv[]) {
 
   cl::ParseCommandLineOptions(argc, argv);
   PrinterOptions Options = {
-      DwarfSectionsOnly, DwarfDump, DebugAbbrevOffsets, HexDump, HexDumpOneLine,
-      ShowForm,          Verbose};
+      DwarfSectionsOnly, DwarfDump,      DebugAbbrevOffsets,
+      HexDump,           HexDumpOneLine, ShowForm,
+      Verbose,           DIERefs};
 
   std::unique_ptr<ObjectStore> CAS = ExitOnErr(createOnDiskCAS(CASPath));
   MCCASPrinter Printer(Options, *CAS, llvm::outs());

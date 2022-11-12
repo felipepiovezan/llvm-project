@@ -142,7 +142,9 @@ Error MCCASPrinter::printDIEAttrs(BinaryStreamReader &Reader,
   constexpr auto FormParams =
       dwarf::FormParams{4 /*Version*/, AddrSize, dwarf::DwarfFormat::DWARF32};
 
+  uint64_t AttrAndFormSizes = 0;
   while (true) {
+    uint64_t StartOffset = Reader.getOffset();
     uint64_t AttrAsInt;
     if (auto E = Reader.readULEB128(AttrAsInt))
       return E;
@@ -159,6 +161,7 @@ Error MCCASPrinter::printDIEAttrs(BinaryStreamReader &Reader,
     OS << formatv("{0, -30} {1, -25} ", dwarf::AttributeString(Attr),
                   dwarf::FormEncodingString(Form));
 
+    AttrAndFormSizes += Reader.getOffset() - StartOffset;
     if (doesntDedup(Form, Attr)) {
       OS << "<data in separate block>\n";
       continue;
@@ -178,6 +181,8 @@ Error MCCASPrinter::printDIEAttrs(BinaryStreamReader &Reader,
         RawBytes, OS, [&](uint8_t Char) { OS << utohexstr(Char); }, " ");
     OS << "]\n";
   }
+  OS.indent(Indent);
+  OS << "Attr + Form size = " << AttrAndFormSizes << "\n";
   return Error::success();
 }
 

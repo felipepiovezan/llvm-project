@@ -253,6 +253,8 @@ Expected<SmallVector<DIERef>> loadAllChildren(DIERef DIE) {
       Children.push_back(*DIEChild);
       return Error::success();
     }
+    if (DebugDIEAbbrev::Cast(*MaybeLoaded))
+      return Error::success();
     return createStringError(inconvertibleErrorCode(),
                              "Expected DIERef as child");
   };

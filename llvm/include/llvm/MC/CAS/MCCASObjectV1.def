@@ -23,6 +23,7 @@ CASV1_SIMPLE_DATA_REF(DebugLineRef, mc:debug_line)
 CASV1_SIMPLE_DATA_REF(DebugAbbrevRef, mc:debug_abbrev)
 CASV1_SIMPLE_DATA_REF(DebugAbbrevOffsetsRef, mc:debug_abbrev_offsets)
 CASV1_SIMPLE_DATA_REF(DebugInfoDistinctDataRef, mc:debug_info_distinct_data)
+CASV1_SIMPLE_DATA_REF(DebugDIEAbbrev, mc:debug_DIE_abbrev)
 
 #undef CASV1_SIMPLE_DATA_REF
 #endif /* CASV1_SIMPLE_DATA_REF */

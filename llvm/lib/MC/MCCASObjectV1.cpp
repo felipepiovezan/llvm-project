@@ -2606,13 +2606,20 @@ Expected<DIERef> DIERef::create(MCCASBuilder &MB,
 // Helper class for creating a DIERef.
 struct DIEDataWriter {
   DIEDataWriter(SmallVectorImpl<char> &DistinctData)
-      : Data(), DataStream(Data), DistinctDataStream(DistinctData) {}
+      : Data(), DataStream(Data), DistinctDataStream(DistinctData),
+        AbbrevDataStream(AbbrevData) {}
 
   /// Write ULEB128(V) to the main data stream.
   void writeULEB128(uint64_t V) { encodeULEB128(V, DataStream); }
 
+  /// Write ULEB128(V) to the abbrev data stream.
+  void writeULEB128ToAbbrev(uint64_t V) { encodeULEB128(V, AbbrevDataStream); }
+
   /// Write V to the main data stream.
   void writeByte(uint8_t V) { DataStream << V; }
+
+  /// Write V to the abbrev data stream.
+  void writeByteToAbbrev(uint8_t V) { AbbrevDataStream << V; }
 
   /// Write the contents of V to the main data stream.
   void writeData(ArrayRef<char> V) { DataStream.write(V.data(), V.size()); }
@@ -2626,14 +2633,21 @@ struct DIEDataWriter {
   void addRef(DIERef CASObj) { Children.push_back(CASObj.getRef()); }
 
   /// Saves the main data stream and any children to a new DIERef node.
-  Expected<DIERef> getCASNode(MCCASBuilder &CASBuilder) const {
+  Expected<DIERef> getCASNode(MCCASBuilder &CASBuilder) {
+    auto MaybeAbbrev =
+        DebugDIEAbbrev::create(CASBuilder, toStringRef(AbbrevData));
+    if (!MaybeAbbrev)
+      return MaybeAbbrev.takeError();
+    Children.push_back(MaybeAbbrev->getRef());
     return DIERef::create(CASBuilder, Children, Data);
   }
 
 private:
   SmallVector<char> Data;
+  SmallVector<char> AbbrevData;
   raw_svector_ostream DataStream;
   raw_svector_ostream DistinctDataStream;
+  raw_svector_ostream AbbrevDataStream;
   SmallVector<cas::ObjectRef> Children;
 };
 
@@ -2652,8 +2666,8 @@ static bool shouldCreateSeparateBlockFor(DWARFDie &DIE) {
 
 // Writes a pair [TAG, has_children] to the DIE data streams.
 void encodeDIEHeader(DWARFDie &DIE, DIEDataWriter &Writer) {
-  Writer.writeULEB128(DIE.getTag());
-  Writer.writeByte(DIE.hasChildren());
+  Writer.writeULEB128ToAbbrev(DIE.getTag());
+  Writer.writeByteToAbbrev(DIE.hasChildren());
 }
 
 // Writes tuples of [Attr, Form, Data] to the DIE data streams.
@@ -2665,14 +2679,14 @@ void encodeDIEAttrs(DWARFDie &DIE, DIEDataWriter &Writer,
     dwarf::Form Form = AttrValue.Value.getForm();
     ArrayRef<char> FormData =
         DebugInfoData.slice(AttrValue.Offset, AttrValue.ByteSize);
-    Writer.writeULEB128(Attr);
-    Writer.writeULEB128(Form);
+    Writer.writeULEB128ToAbbrev(Attr);
+    Writer.writeULEB128ToAbbrev(Form);
     if (doesntDedup(Form, Attr))
       Writer.writeDistinctData(FormData);
     else
       Writer.writeData(FormData);
   }
-  Writer.writeByte(0);
+  Writer.writeByteToAbbrev(0);
 }
 
 // Serializes DIE and all its children using Writer.

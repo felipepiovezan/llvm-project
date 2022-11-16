@@ -48,8 +48,6 @@ constexpr StringLiteral PaddingRef::KindString;
 #include "llvm/MC/CAS/MCCASObjectV1.def"
 constexpr StringLiteral DebugInfoSectionRef::KindString;
 
-constexpr unsigned Dwarf4HeaderSize32Bit = 11;
-
 void MCSchema::anchor() {}
 char MCSchema::ID = 0;
 
@@ -60,6 +58,10 @@ cl::opt<unsigned>
 cl::opt<bool> SplitStringSections(
     "mc-cas-split-string-sections",
     cl::desc("Split String Sections (SymTable and DebugStr)"), cl::init(true));
+
+cl::opt<bool> CreateDIEBlocks(
+    "mc-cas-create-die-blocks",
+    cl::desc("Create the new experimental DIE blocks"), cl::init(false));
 
 enum RelEncodeLoc {
   Atom,
@@ -110,7 +112,7 @@ public:
   /// unit.
   Expected<PartitionedDebugInfoSection>
   partitionCUData(ArrayRef<char> DebugInfoData, uint64_t AbbrevOffset,
-                  uint64_t CUOffset, DWARFContext *Ctx);
+                  uint64_t CUOffset, DWARFContext *Ctx, MCCASBuilder &Builder);
 };
 
 struct CUInfo {
@@ -1984,10 +1986,38 @@ public:
   }
 };
 
+/// Helper class to convert DIEs into CAS objects.
+struct DIEToCASConverter {
+  DIEToCASConverter(ArrayRef<char> DebugInfoData, MCCASBuilder &CASBuilder)
+      : DebugInfoData(DebugInfoData), CASBuilder(CASBuilder) {}
+
+  /// Converts a DIE into three types of CAS objects:
+  /// 1. A tree of DIEDataRefs, containing data expected to deduplicate.
+  /// 2. A single DIEAbbrevSetRef, containing all the abbreviations used by the
+  /// DIE as DIEAbbrevRef objects.
+  /// 3. A single DIEDistinctDataRef, containing data that is not expected to
+  /// deduplicate.
+  /// These nodes are wrapped into a DIETopLevelRef for convenience.
+  Expected<DIETopLevelRef> convert(DWARFDie DIE, ArrayRef<char> HeaderData);
+
+private:
+  ArrayRef<char> DebugInfoData;
+  MCCASBuilder &CASBuilder;
+
+  Expected<DIEDataRef> convertInNewDIEBlock(DWARFDie DIE,
+                                            DistinctDataWriter &DistinctWriter,
+                                            AbbrevSetWriter &AbbrevWriter);
+
+  Error convertImpl(DWARFDie &DIE, DIEDataWriter &DIEWriter,
+                    DistinctDataWriter &DistinctWriter,
+                    AbbrevSetWriter &AbbrevWriter);
+};
+
 Expected<InMemoryCASDWARFObject::PartitionedDebugInfoSection>
 InMemoryCASDWARFObject::partitionCUData(ArrayRef<char> DebugInfoData,
                                         uint64_t AbbrevOffset,
-                                        uint64_t CUOffset, DWARFContext *Ctx) {
+                                        uint64_t CUOffset, DWARFContext *Ctx,
+                                        MCCASBuilder &Builder) {
 
   StringRef AbbrevSectionContribution =
       getAbbrevSection().drop_front(AbbrevOffset);
@@ -2015,6 +2045,16 @@ InMemoryCASDWARFObject::partitionCUData(ArrayRef<char> DebugInfoData,
     append_range(PartitionedData.DebugInfoCURefData,
                  DebugInfoData.take_front(Dwarf4HeaderSize32Bit));
     CUOffset += Dwarf4HeaderSize32Bit;
+
+    if (CreateDIEBlocks) {
+      ArrayRef<char> HeaderData =
+          DebugInfoData.take_front(Dwarf4HeaderSize32Bit);
+      Expected<DIETopLevelRef> Converted =
+          DIEToCASConverter(DebugInfoData, Builder).convert(CUDie, HeaderData);
+      if (!Converted)
+        return Converted.takeError();
+      Builder.addNode(*Converted);
+    }
 
     DWARFDataExtractor DWARFExtractor(
         toStringRef(PartitionedData.DebugInfoCURefData), IsLittleEndian, 8);
@@ -2084,7 +2124,7 @@ Expected<AbbrevAndDebugSplit> MCCASBuilder::splitDebugInfoAndAbbrevSections() {
        llvm::zip(SplitInfo->SplitCUData, SplitInfo->AbbrevOffsets)) {
     uint64_t CUOffset = 0;
     auto PartitionedData =
-        CASObj.partitionCUData(CUData, AbbrevOffset, CUOffset, DWARFCtx);
+        CASObj.partitionCUData(CUData, AbbrevOffset, CUOffset, DWARFCtx, *this);
     if (!PartitionedData)
       return PartitionedData.takeError();
     DistinctData.append(PartitionedData->DistinctData.begin(),
@@ -2647,4 +2687,113 @@ Expected<DIEDataRef> DIEDataRef::create(MCCASBuilder &MB,
   append_range(B->Refs, Children);
   append_range(B->Data, toStringRef(Contents));
   return get(B->build());
+}
+
+// Returns true if DIE should be placed in a separate CAS block.
+static bool shouldCreateSeparateBlockFor(DWARFDie &DIE) {
+  dwarf::Tag Tag = DIE.getTag();
+  if (!is_contained({dwarf::Tag::DW_TAG_subprogram}, Tag))
+    return false;
+
+  for (const DWARFAttribute &AttrValue : DIE.attributes())
+    if (AttrValue.Attr == dwarf::Attribute::DW_AT_low_pc)
+      return true;
+  return false;
+}
+
+static void writeDIEAttrs(DWARFDie &DIE, ArrayRef<char> DebugInfoData,
+                          DIEDataWriter &DIEWriter,
+                          DistinctDataWriter &DistinctWriter) {
+  for (const DWARFAttribute &AttrValue : DIE.attributes()) {
+    dwarf::Attribute Attr = AttrValue.Attr;
+    dwarf::Form Form = AttrValue.Value.getForm();
+    ArrayRef<char> FormData =
+        DebugInfoData.slice(AttrValue.Offset, AttrValue.ByteSize);
+    if (doesntDedup(Form, Attr))
+      DistinctWriter.writeData(FormData);
+    else
+      DIEWriter.writeData(FormData);
+  }
+}
+
+/// Creates an abbreviation for DIE using AbbrevWriter.
+/// Stores the contents of the DIE using DistinctWriter and DIEWriter following
+/// the format:
+///   [abbreviation_index, raw_data?]+
+/// * abbreviation_index is always written with DistinctWriter.
+/// * raw_data, when present, may be written to either DistinctWriter or
+/// DIEWriter, depending on deduplication choices made.
+/// * If abbreviation_index is getEndOfDIESiblingsMarker(), raw_data is empty and
+/// this denotes the end of a sequence of sibling DIEs.
+/// * If abbreviation_index is getDIEInAnotherBlockMarker(), raw_data is empty
+/// and this denotes a DIE placed in a child CAS block.
+/// * Otherwise, abbreviation_index is an index into the list of references of a
+/// DIEAbbrevSetRef block. In this case, raw_data should be interpreted
+/// according to the corresponding DIEAbbrevRefs block.
+Error DIEToCASConverter::convertImpl(DWARFDie &DIE, DIEDataWriter &DIEWriter,
+                                     DistinctDataWriter &DistinctWriter,
+                                     AbbrevSetWriter &AbbrevWriter) {
+  Expected<unsigned> MaybeAbbrevIndex =
+      AbbrevWriter.createAbbrevEntry(DIE, CASBuilder);
+  if (!MaybeAbbrevIndex)
+    return MaybeAbbrevIndex.takeError();
+
+  DistinctWriter.writeULEB128(encodeAbbrevIndex(*MaybeAbbrevIndex));
+  writeDIEAttrs(DIE, DebugInfoData, DIEWriter, DistinctWriter);
+
+  for (DWARFDie Child = DIE.getFirstChild(); Child;
+       Child = Child.getSibling()) {
+    dwarf::Tag ChildTag = Child.getTag();
+    if (ChildTag == dwarf::Tag::DW_TAG_null) {
+      DistinctWriter.writeULEB128(getEndOfDIESiblingsMarker());
+      break;
+    }
+
+    // FIXME: don't use recursion.
+    if (shouldCreateSeparateBlockFor(Child)) {
+      DistinctWriter.writeULEB128(getDIEInAnotherBlockMarker());
+      auto MaybeNode =
+          convertInNewDIEBlock(Child, DistinctWriter, AbbrevWriter);
+      if (!MaybeNode)
+        return MaybeNode.takeError();
+      DIEWriter.addRef(*MaybeNode);
+      continue;
+    }
+
+    if (auto E = convertImpl(Child, DIEWriter, DistinctWriter, AbbrevWriter))
+      return E;
+  }
+  return Error::success();
+}
+
+Expected<DIEDataRef>
+DIEToCASConverter::convertInNewDIEBlock(DWARFDie DIE,
+                                        DistinctDataWriter &DistinctWriter,
+                                        AbbrevSetWriter &AbbrevWriter) {
+  DIEDataWriter DIEWriter;
+  if (auto E = convertImpl(DIE, DIEWriter, DistinctWriter, AbbrevWriter))
+    return E;
+  return DIEWriter.getCASNode(CASBuilder);
+}
+
+Expected<DIETopLevelRef> DIEToCASConverter::convert(DWARFDie DIE,
+                                                    ArrayRef<char> HeaderData) {
+  AbbrevSetWriter AbbrevWriter;
+  DistinctDataWriter DistinctWriter;
+  DistinctWriter.writeData(HeaderData);
+  Expected<DIEDataRef> MaybeDIE =
+      convertInNewDIEBlock(DIE, DistinctWriter, AbbrevWriter);
+  if (!MaybeDIE)
+    return MaybeDIE.takeError();
+  Expected<DIEAbbrevSetRef> MaybeAbbrevSet =
+      AbbrevWriter.endAbbrevSet(CASBuilder);
+  if (!MaybeAbbrevSet)
+    return MaybeAbbrevSet.takeError();
+  Expected<DIEDistinctDataRef> MaybeDistinct =
+      DistinctWriter.getCASNode(CASBuilder);
+  if (!MaybeDistinct)
+    return MaybeDistinct.takeError();
+  SmallVector<cas::ObjectRef, 3> Refs{
+      MaybeDIE->getRef(), MaybeAbbrevSet->getRef(), MaybeDistinct->getRef()};
+  return DIETopLevelRef::create(CASBuilder, Refs);
 }

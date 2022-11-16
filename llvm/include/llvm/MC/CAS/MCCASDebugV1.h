@@ -18,6 +18,8 @@ namespace llvm {
 namespace mccasformats {
 namespace v1 {
 
+constexpr unsigned Dwarf4HeaderSize32Bit = 11;
+
 /// Returns true if the values associated with a combination of Form and Attr
 /// are not expected to deduplicate.
 bool doesntDedup(dwarf::Form Form, dwarf::Attribute Attr);

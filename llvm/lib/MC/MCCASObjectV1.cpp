@@ -1920,6 +1920,70 @@ static void partitionCUDie(
   }
 }
 
+/// Helper class to create DIEDataRefs by keeping track of references to
+/// children blocks.
+struct DIEDataWriter : public DataWriter {
+  /// Add `CASObj` to the list of children of the DIE being created.
+  void addRef(DIEDataRef CASObj) { Children.push_back(CASObj.getRef()); }
+
+  /// Saves the main data stream and any children to a new DIEDataRef node.
+  Expected<DIEDataRef> getCASNode(MCCASBuilder &CASBuilder) {
+    return DIEDataRef::create(CASBuilder, Children, Data);
+  }
+
+private:
+  SmallVector<cas::ObjectRef> Children;
+};
+
+/// Helper class to create DIEDistinctDataRefs.
+/// These nodes contain raw data that is not expected to deduplicate. This data
+/// is described by some DIEAbbrevRef block.
+struct DistinctDataWriter : public DataWriter {
+  Expected<DIEDistinctDataRef> getCASNode(MCCASBuilder &CASBuilder) {
+    return DIEDistinctDataRef::create(CASBuilder, toStringRef(Data));
+  }
+};
+
+/// Helper class to create DIEAbbrevSetRefs and DIEAbbrevRefs.
+/// A DIEAbbrevSetRef has no data, only references to DIEAbbrevRefs.
+/// A DIEAbbrevRef has no references, and its data follow the format of a DWARF
+/// abbreviation entry exactly.
+class AbbrevSetWriter : public AbbrevEntryWriter {
+  DenseMap<cas::ObjectRef, unsigned> Children;
+
+public:
+  Expected<unsigned> createAbbrevEntry(DWARFDie DIE, MCCASBuilder &CASBuilder) {
+    writeAbbrevEntry(DIE);
+    auto MaybeAbbrev = DIEAbbrevRef::create(CASBuilder, toStringRef(Data));
+    if (!MaybeAbbrev)
+      return MaybeAbbrev.takeError();
+    Data.clear();
+
+    // Assign the smallest possible index to the new Abbrev.
+    auto [it, inserted] =
+        Children.try_emplace(MaybeAbbrev->getRef(), Children.size());
+    return it->getSecond();
+  }
+
+  /// Creates a DIEAbbrevSetRef with all the DIEAbbrevRefs created so far.
+  Expected<DIEAbbrevSetRef> endAbbrevSet(MCCASBuilder &CASBuilder) {
+    if (Children.empty())
+      return createStringError(inconvertibleErrorCode(),
+                               "Abbrev Set cannot be empty");
+
+    // Initialize the vector with copies of an arbitrary element, because we
+    // need to assign elements in a random order and ObjectRefs can't be
+    // default constructed.
+    SmallVector<cas::ObjectRef, 0> ChildrenArray(Children.size(),
+                                                 Children.begin()->getFirst());
+
+    // Order the DIEAbbrevRefs based on their creation order.
+    for (auto [Obj, Idx] : Children)
+      ChildrenArray[Idx] = Obj;
+    return DIEAbbrevSetRef::create(CASBuilder, ChildrenArray);
+  }
+};
+
 Expected<InMemoryCASDWARFObject::PartitionedDebugInfoSection>
 InMemoryCASDWARFObject::partitionCUData(ArrayRef<char> DebugInfoData,
                                         uint64_t AbbrevOffset,

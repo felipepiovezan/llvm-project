@@ -2797,3 +2797,31 @@ Expected<DIETopLevelRef> DIEToCASConverter::convert(DWARFDie DIE,
       MaybeDIE->getRef(), MaybeAbbrevSet->getRef(), MaybeDistinct->getRef()};
   return DIETopLevelRef::create(CASBuilder, Refs);
 }
+
+Expected<LoadedDIETopLevel>
+mccasformats::v1::loadDIETopLevel(DIETopLevelRef TopLevelRef) {
+  if (TopLevelRef.getNumReferences() != 3)
+    return createStringError(
+        inconvertibleErrorCode(),
+        "TopLevelRef is expected to have three references");
+
+  const MCSchema &Schema = TopLevelRef.getSchema();
+  Expected<DIEDataRef> RootDIE =
+      DIEDataRef::get(Schema, TopLevelRef.getReference(0));
+  Expected<DIEAbbrevSetRef> AbbrevSet =
+      DIEAbbrevSetRef::get(Schema, TopLevelRef.getReference(1));
+  Expected<DIEDistinctDataRef> DistinctData =
+      DIEDistinctDataRef::get(Schema, TopLevelRef.getReference(2));
+  if (!RootDIE)
+    return RootDIE.takeError();
+  if (!AbbrevSet)
+    return AbbrevSet.takeError();
+  if (!DistinctData)
+    return DistinctData.takeError();
+
+  auto MaybeAbbrevEntries = loadAllRefs<DIEAbbrevRef>(*AbbrevSet);
+  if (!MaybeAbbrevEntries)
+    return MaybeAbbrevEntries.takeError();
+  return LoadedDIETopLevel{std::move(*MaybeAbbrevEntries), *DistinctData,
+                           *RootDIE};
+}

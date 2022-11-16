@@ -237,3 +237,31 @@ void AbbrevEntryWriter::writeAbbrevEntry(DWARFDie DIE) {
   }
   writeULEB128(getEndOfAttributesMarker());
 }
+
+Expected<dwarf::Tag> AbbrevEntryReader::readTag() {
+  uint64_t TagAsInt;
+  if (auto E = DataStream.readULEB128(TagAsInt))
+    return E;
+  return static_cast<dwarf::Tag>(TagAsInt);
+}
+
+Expected<bool> AbbrevEntryReader::readHasChildren() {
+  char HasChildren;
+  if (auto E = DataStream.readInteger(HasChildren))
+    return E;
+  return HasChildren;
+}
+
+Expected<dwarf::Attribute> AbbrevEntryReader::readAttr() {
+  uint64_t AttrAsInt;
+  if (auto E = DataStream.readULEB128(AttrAsInt))
+    return E;
+  return static_cast<dwarf::Attribute>(AttrAsInt);
+}
+
+Expected<dwarf::Form> AbbrevEntryReader::readForm() {
+  uint64_t FormAsInt;
+  if (auto E = DataStream.readULEB128(FormAsInt))
+    return E;
+  return static_cast<dwarf::Form>(FormAsInt);
+}

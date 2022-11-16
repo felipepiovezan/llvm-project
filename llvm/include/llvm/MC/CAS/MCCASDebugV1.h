@@ -11,6 +11,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/DWARF/DWARFDie.h"
+#include "llvm/Support/BinaryStreamReader.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/LEB128.h"
 
@@ -41,6 +42,13 @@ inline uint16_t getDIEInAnotherBlockMarker() { return 1; }
 /// written to the CAS.
 inline uint64_t encodeAbbrevIndex(uint64_t Index) { return Index + 2; }
 
+/// Decodes a value written to the CAS as an index into the abbreviation table.
+inline uint64_t decodeAbbrevIndex(uint64_t Index) {
+  assert(Index != getEndOfDIESiblingsMarker() &&
+         Index != getDIEInAnotherBlockMarker());
+  return Index - 2;
+}
+
 /// A special value to indicate the end of a sequence of attributes. This must
 /// not conflict with any dwarf::Attribute.
 inline uint16_t getEndOfAttributesMarker() { return 0; }
@@ -67,6 +75,19 @@ protected:
 // Helper class to write a DIE's abbreviation contents to a buffer.
 struct AbbrevEntryWriter : DataWriter {
   void writeAbbrevEntry(DWARFDie DIE);
+};
+
+struct AbbrevEntryReader {
+  AbbrevEntryReader(StringRef Data)
+      : DataStream(Data, support::endianness::little) {}
+  Expected<dwarf::Tag> readTag();
+  Expected<bool> readHasChildren();
+
+  Expected<dwarf::Attribute> readAttr();
+  Expected<dwarf::Form> readForm();
+
+private:
+  BinaryStreamReader DataStream;
 };
 } // namespace v1
 } // namespace mccasformats

@@ -2692,12 +2692,27 @@ Expected<DIEDataRef> DIEDataRef::create(MCCASBuilder &MB,
 // Returns true if DIE should be placed in a separate CAS block.
 static bool shouldCreateSeparateBlockFor(DWARFDie &DIE) {
   dwarf::Tag Tag = DIE.getTag();
-  if (!is_contained({dwarf::Tag::DW_TAG_subprogram}, Tag))
-    return false;
 
-  for (const DWARFAttribute &AttrValue : DIE.attributes())
-    if (AttrValue.Attr == dwarf::Attribute::DW_AT_low_pc)
-      return true;
+  if (Tag == dwarf::Tag::DW_TAG_subprogram)
+    for (const DWARFAttribute &AttrValue : DIE.attributes())
+      if (AttrValue.Attr == dwarf::Attribute::DW_AT_low_pc)
+        return true;
+  if (Tag == dwarf::Tag::DW_TAG_class_type ||
+      Tag == dwarf::Tag::DW_TAG_structure_type) {
+    int Sum = 0;
+    for (const DWARFAttribute &AttrValue : DIE.attributes()) {
+      if (doesntDedup(AttrValue.Value.getForm(), AttrValue.Attr))
+        continue;
+      Sum += AttrValue.ByteSize;
+      if (Sum > 8)
+        return true;
+    }
+    for (auto Child = DIE.getFirstChild(); Child; Child = Child.getSibling()) {
+      Sum += 1;
+      if (Sum > 8)
+        return true;
+    }
+  }
   return false;
 }
 

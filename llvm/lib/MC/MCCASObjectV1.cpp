@@ -503,9 +503,15 @@ materializeDebugInfoFromTagImpl(MCCASReader &Reader,
     encodeULEB128(decodeAbbrevIndexAsDwarfAbbrevIdx(AbbrevIdx), SectionStream);
   };
 
-  auto AttrCallback = [&](dwarf::Attribute, dwarf::Form, StringRef FormData,
-                          bool) {
+  auto AttrCallback = [&](dwarf::Attribute, dwarf::Form Form,
+                          StringRef FormData, bool) {
     SectionStream << FormData;
+    if (Form == dwarf::Form::DW_FORM_compressed_ref4_1) // Assumes little endian
+      SectionStream.write_zeros(3);
+    if (Form == dwarf::Form::DW_FORM_compressed_ref4_2)
+      SectionStream.write_zeros(2);
+    if (Form == dwarf::Form::DW_FORM_compressed_ref4_3)
+      SectionStream.write_zeros(3);
   };
 
   auto EndTagCallback = [&](bool HadChildren) {
@@ -1727,8 +1733,10 @@ class AbbrevSetWriter : public AbbrevEntryWriter {
   DenseMap<cas::ObjectRef, unsigned> Children;
 
 public:
-  Expected<unsigned> createAbbrevEntry(DWARFDie DIE, MCCASBuilder &CASBuilder) {
-    writeAbbrevEntry(DIE);
+  Expected<unsigned> createAbbrevEntry(DWARFDie DIE,
+                                       ArrayRef<char> DebugInfoData,
+                                       MCCASBuilder &CASBuilder) {
+    writeAbbrevEntry(DIE, DebugInfoData);
     auto MaybeAbbrev = DIEAbbrevRef::create(CASBuilder, toStringRef(Data));
     if (!MaybeAbbrev)
       return MaybeAbbrev.takeError();
@@ -2504,8 +2512,12 @@ static void writeDIEAttrs(DWARFDie &DIE, ArrayRef<char> DebugInfoData,
     dwarf::Form Form = AttrValue.Value.getForm();
     ArrayRef<char> FormData =
         DebugInfoData.slice(AttrValue.Offset, AttrValue.ByteSize);
-    if (doesntDedup(Form, Attr))
-      DistinctWriter.writeData(FormData);
+    if (doesntDedup(Form, Attr)) {
+      if (Form == dwarf::Form::DW_FORM_ref4)
+        DistinctWriter.writeData(convertRef4(FormData));
+      else
+        DistinctWriter.writeData(FormData);
+    }
     else
       DIEWriter.writeData(FormData);
   }
@@ -2529,7 +2541,7 @@ Error DIEToCASConverter::convertImpl(DWARFDie &DIE, DIEDataWriter &DIEWriter,
                                      DistinctDataWriter &DistinctWriter,
                                      AbbrevSetWriter &AbbrevWriter) {
   Expected<unsigned> MaybeAbbrevIndex =
-      AbbrevWriter.createAbbrevEntry(DIE, CASBuilder);
+      AbbrevWriter.createAbbrevEntry(DIE, DebugInfoData, CASBuilder);
   if (!MaybeAbbrevIndex)
     return MaybeAbbrevIndex.takeError();
 

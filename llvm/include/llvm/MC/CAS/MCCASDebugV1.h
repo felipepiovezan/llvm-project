@@ -83,9 +83,12 @@ protected:
   raw_svector_ostream DataStream;
 };
 
+/// Use a more efficient format for storing Ref4s.
+ArrayRef<char> convertRef4(ArrayRef<char> Ref4Data);
+
 // Helper class to write a DIE's abbreviation contents to a buffer.
 struct AbbrevEntryWriter : DataWriter {
-  void writeAbbrevEntry(DWARFDie DIE);
+  void writeAbbrevEntry(DWARFDie DIE, ArrayRef<char> DebugInfoData);
 };
 
 struct AbbrevEntryReader {

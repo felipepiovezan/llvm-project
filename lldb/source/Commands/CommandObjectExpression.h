@@ -89,6 +89,9 @@ protected:
   ///         executed and the result could be printed to the output stream.
   bool EvaluateExpression(llvm::StringRef expr, Stream &output_stream,
                           Stream &error_stream, CommandReturnObject &result);
+  bool EvaluateExpressionImpl(llvm::StringRef expr, Stream &output_stream,
+                              Stream &error_stream,
+                              CommandReturnObject &result);
 
   void GetMultilineExpression();
 

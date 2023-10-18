@@ -22,6 +22,7 @@
 #include "lldb/Target/Process.h"
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/Timer.h"
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-private-enumerations.h"
 
@@ -414,6 +415,23 @@ bool CommandObjectExpression::EvaluateExpression(llvm::StringRef expr,
                                                  Stream &output_stream,
                                                  Stream &error_stream,
                                                  CommandReturnObject &result) {
+  static auto count = 0;
+  if (count == 0) {
+    count++;
+    LLDB_SCOPED_TIMERF("first expression timer");
+    return EvaluateExpressionImpl(expr, output_stream, error_stream, result);
+  }
+  if (count == 1) {
+    count++;
+    LLDB_SCOPED_TIMERF("second expression timer");
+    return EvaluateExpressionImpl(expr, output_stream, error_stream, result);
+  }
+  return EvaluateExpressionImpl(expr, output_stream, error_stream, result);
+}
+
+bool CommandObjectExpression::EvaluateExpressionImpl(
+    llvm::StringRef expr, Stream &output_stream, Stream &error_stream,
+    CommandReturnObject &result) {
   auto start = std::chrono::steady_clock::now();
 
   // Don't use m_exe_ctx as this might be called asynchronously after the

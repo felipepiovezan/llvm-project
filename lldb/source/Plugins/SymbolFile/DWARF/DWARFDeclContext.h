@@ -77,6 +77,8 @@ public:
     m_qualified_name.clear();
   }
 
+  llvm::ArrayRef<Entry> getEntries() const { return m_entries; }
+
 protected:
   typedef std::vector<Entry> collection;
   collection m_entries;

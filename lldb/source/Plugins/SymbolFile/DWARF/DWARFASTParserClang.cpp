@@ -1734,7 +1734,10 @@ DWARFASTParserClang::ParseStructureLikeDIE(const SymbolContext &sc,
       if (debug_map_symfile) {
         // We weren't able to find a full declaration in this DWARF, see
         // if we have a declaration anywhere else...
+        llvm::outs() << "Trying to find a full decl for "
+                     << attrs.name.GetStringRef() << " ...\n";
         type_sp = debug_map_symfile->FindDefinitionTypeForDWARFDeclContext(die);
+        llvm::outs() << "...done\n";
       }
     }
 

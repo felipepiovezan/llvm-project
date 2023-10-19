@@ -3154,6 +3154,18 @@ SymbolFileDWARF::FindDefinitionTypeForDWARFDeclContext(const DWARFDIE &die) {
             type_dwarf_decl_ctx.GetQualifiedName());
       }
 
+      auto fixed_ctx = GetDWARFDeclContext(die);
+      auto curr_ctx = type_dwarf_decl_ctx;
+      llvm::outs() << "fixed ctx = ";
+      llvm::interleaveComma(
+          fixed_ctx.getEntries(), llvm::outs(),
+          [&](const auto &entry) {  llvm::outs() << entry.name; });
+      llvm::outs() << "\n";
+      llvm::outs() << "curr  ctx = ";
+      llvm::interleaveComma(
+          curr_ctx.getEntries(), llvm::outs(),
+          [&](const auto &entry) {  llvm::outs() << entry.name; });
+      llvm::outs() << "\n";
       // Make sure the decl contexts match all the way up
       if (die_dwarf_decl_ctx != type_dwarf_decl_ctx)
         return true;

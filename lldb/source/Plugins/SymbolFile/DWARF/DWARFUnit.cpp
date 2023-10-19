@@ -213,6 +213,8 @@ DWARFUnit::ScopedExtractDIEs &DWARFUnit::ScopedExtractDIEs::operator=(
 // held R/W and m_die_array must be empty.
 void DWARFUnit::ExtractDIEsRWLocked() {
   llvm::sys::ScopedWriter first_die_lock(m_first_die_mutex);
+  static int extractor_counter = 0;
+  llvm::outs() << "extraction number = " << ++extractor_counter << "\n";
 
   ElapsedTime elapsed(m_dwarf.GetDebugInfoParseTimeRef());
   LLDB_SCOPED_TIMERF(

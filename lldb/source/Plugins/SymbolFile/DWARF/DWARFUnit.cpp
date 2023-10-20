@@ -232,8 +232,7 @@ void DWARFUnit::ExtractDIEsRWLocked() {
   // We are in our compile unit, parse starting at the offset we were told to
   // parse
   const DWARFDataExtractor &data = GetData();
-  std::vector<uint32_t> die_index_stack;
-  die_index_stack.reserve(32);
+  llvm::SmallVector<uint32_t, 32> die_index_stack;
   die_index_stack.push_back(0);
   bool prev_die_had_children = false;
   while (offset < next_cu_offset && die.Extract(data, this, &offset)) {
@@ -249,7 +248,7 @@ void DWARFUnit::ExtractDIEsRWLocked() {
       // compile unit DIE. The compile unit DIE is always the first entry, so
       // if our size is 1, then we are adding the first compile unit child
       // DIE and should reserve the memory.
-      m_die_array.reserve(GetDebugInfoSize() / 24);
+      m_die_array.reserve(GetDebugInfoSize());
       m_die_array.push_back(die);
 
       if (!m_first_die)

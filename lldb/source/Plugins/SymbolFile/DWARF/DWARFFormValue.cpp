@@ -186,11 +186,23 @@ static constexpr FormSize g_form_sizes[] = {
     {1, 16}, // 0x1e DW_FORM_data16
     {1, 4},  // 0x1f DW_FORM_line_strp
     {1, 8},  // 0x20 DW_FORM_ref_sig8
+    {1, 0},  // 0x21 DW_FORM_implicit_const
+    {0, 0},  // 0x22 DW_FORM_loclistx
+    {0, 0},  // 0x23 DW_FORM_rnglistx
+    {0, 0},  // 0x24 DW_FORM_ref_sup8
+    {1, 1},  // 0x25 DW_FORM_strx1
+    {1, 2},  // 0x26 DW_FORM_strx2
+    {1, 3},  // 0x27 DW_FORM_strx3
+    {1, 4},  // 0x28 DW_FORM_strx4
+    {1, 1},  // 0x29 DW_FORM_addrx1
+    {1, 2},  // 0x2a DW_FORM_addrx2
+    {1, 3},  // 0x2b DW_FORM_addrx3
+    {1, 4},  // 0x2c DW_FORM_addrx4
 };
 
 std::optional<uint8_t> DWARFFormValue::GetFixedSize(dw_form_t form,
                                                     const DWARFUnit *u) {
-  if (form <= DW_FORM_ref_sig8 && g_form_sizes[form].valid)
+  if (form <= DW_FORM_addrx4 && g_form_sizes[form].valid)
     return static_cast<uint8_t>(g_form_sizes[form].size);
   if (form == DW_FORM_addr && u)
     return u->GetAddressByteSize();
@@ -210,6 +222,11 @@ bool DWARFFormValue::SkipValue(dw_form_t form,
                                const DWARFDataExtractor &debug_info_data,
                                lldb::offset_t *offset_ptr,
                                const DWARFUnit *unit) {
+  if (std::optional<uint8_t> fixed_size = GetFixedSize(form, unit)) {
+    *offset_ptr += *fixed_size;
+    return true;
+  }
+
   uint8_t ref_addr_size;
   switch (form) {
   // Blocks if inlined data that have a length field and the data bytes inlined
@@ -256,56 +273,6 @@ bool DWARFFormValue::SkipValue(dw_form_t form,
       ref_addr_size = 4;
     *offset_ptr += ref_addr_size;
     return true;
-
-  // 0 bytes values (implied from DW_FORM)
-  case DW_FORM_flag_present:
-  case DW_FORM_implicit_const:
-    return true;
-
-    // 1 byte values
-    case DW_FORM_addrx1:
-    case DW_FORM_data1:
-    case DW_FORM_flag:
-    case DW_FORM_ref1:
-    case DW_FORM_strx1:
-      *offset_ptr += 1;
-      return true;
-
-    // 2 byte values
-    case DW_FORM_addrx2:
-    case DW_FORM_data2:
-    case DW_FORM_ref2:
-    case DW_FORM_strx2:
-      *offset_ptr += 2;
-      return true;
-
-    // 3 byte values
-    case DW_FORM_addrx3:
-    case DW_FORM_strx3:
-      *offset_ptr += 3;
-      return true;
-
-    // 32 bit for DWARF 32, 64 for DWARF 64
-    case DW_FORM_sec_offset:
-    case DW_FORM_strp:
-    case DW_FORM_line_strp:
-      *offset_ptr += 4;
-      return true;
-
-    // 4 byte values
-    case DW_FORM_addrx4:
-    case DW_FORM_data4:
-    case DW_FORM_ref4:
-    case DW_FORM_strx4:
-      *offset_ptr += 4;
-      return true;
-
-    // 8 byte values
-    case DW_FORM_data8:
-    case DW_FORM_ref8:
-    case DW_FORM_ref_sig8:
-      *offset_ptr += 8;
-      return true;
 
     // signed or unsigned LEB 128 values
     case DW_FORM_addrx:

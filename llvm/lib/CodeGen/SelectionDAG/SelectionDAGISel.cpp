@@ -1441,11 +1441,20 @@ static void processSingleLocVars(FunctionLoweringInfo &FuncInfo,
   }
 }
 
+static bool shouldEnableFastISel(const Function &Fn) {
+  // Don't enable FastISel for async functions. Debug info on those is reliant
+  // on good Argument lowering, and mixing the two selectors tend to result in
+  // poor lowering.
+  return none_of(Fn.args(), [](const Argument &Arg) {
+    return Arg.hasAttribute(Attribute::AttrKind::SwiftAsync);
+  });
+}
+
 void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   FastISelFailed = false;
   // Initialize the Fast-ISel state, if needed.
   FastISel *FastIS = nullptr;
-  if (TM.Options.EnableFastISel) {
+  if (TM.Options.EnableFastISel && shouldEnableFastISel(Fn)) {
     LLVM_DEBUG(dbgs() << "Enabling fast-isel\n");
     FastIS = TLI->createFastISel(*FuncInfo, LibInfo);
   }

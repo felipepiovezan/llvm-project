@@ -47,16 +47,19 @@ DWARF-NEXT:     Entry {{.*}} {
 DWARF-NEXT:       Abbrev: {{.*}}
 DWARF-NEXT:       Tag: DW_TAG_namespace
 DWARF:       DW_IDX_die_offset: 0x0000002f
+DWARF-NEXT:  DW_IDX_parent
 DWARF-NEXT:     }
 DWARF-NEXT:     Entry {{.*}} {
 DWARF-NEXT:       Abbrev: {{.*}}
 DWARF:       Tag: DW_TAG_imported_declaration
 DWARF:       DW_IDX_die_offset: 0x00000035
+DWARF-NEXT:  DW_IDX_parent
 DWARF-NEXT:     }
 DWARF-NEXT:     Entry {{.*}} {
 DWARF-NEXT:       Abbrev: {{.*}}
 DWARF-NEXT:       Tag: DW_TAG_namespace
 DWARF:       DW_IDX_die_offset: 0x0000003c
+DWARF-NEXT:  DW_IDX_parent
 DWARF-NEXT:     }
 
 DWARF-NEXT:   }

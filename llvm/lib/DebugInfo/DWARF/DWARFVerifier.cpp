@@ -1281,7 +1281,7 @@ unsigned DWARFVerifier::verifyNameIndexAttribute(
       {dwarf::DW_IDX_compile_unit, DWARFFormValue::FC_Constant, {"constant"}},
       {dwarf::DW_IDX_type_unit, DWARFFormValue::FC_Constant, {"constant"}},
       {dwarf::DW_IDX_die_offset, DWARFFormValue::FC_Reference, {"reference"}},
-      {dwarf::DW_IDX_parent, DWARFFormValue::FC_Constant, {"constant"}},
+      {dwarf::DW_IDX_parent, DWARFFormValue::FC_Reference, {"reference"}},
   };
 
   ArrayRef<FormClassTable> TableRef(Table);

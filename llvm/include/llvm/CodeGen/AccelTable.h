@@ -258,6 +258,12 @@ public:
   void print(raw_ostream &OS) const override;
 #endif
 
+  static constexpr bool CanProvideParents = true;
+  std::optional<uint64_t> getParentDieOffset() const {
+    if (const DIE *Parent = Die.getParent())
+      return Parent->getOffset();
+    return std::nullopt;
+  }
   const DIE &getDie() const { return Die; }
   uint64_t getDieOffset() const { return Die.getOffset(); }
   unsigned getDieTag() const { return Die.getTag(); }
@@ -280,6 +286,7 @@ public:
   void print(raw_ostream &OS) const override;
 #endif
 
+  static constexpr bool CanProvideParents = false;
   uint64_t getDieOffset() const { return DieOffset; }
   unsigned getDieTag() const { return DieTag; }
   unsigned getCUIndex() const { return CUIndex; }

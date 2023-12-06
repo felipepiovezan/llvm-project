@@ -30,6 +30,9 @@
 
 using namespace llvm;
 
+static cl::opt<bool> EnableParents("enable-debugname-parents", cl::init(false),
+                                   cl::Hidden);
+
 void AccelTableBase::computeBucketCount() {
   // First get the number of unique hashes.
   std::vector<uint32_t> Uniques;
@@ -219,6 +222,8 @@ class Dwarf5AccelTableWriter : public AccelTableWriter {
   MCSymbol *AbbrevStart = Asm->createTempSymbol("names_abbrev_start");
   MCSymbol *AbbrevEnd = Asm->createTempSymbol("names_abbrev_end");
   MCSymbol *EntryPool = Asm->createTempSymbol("names_entries");
+  DenseMap<uint64_t, MCSymbol *> DieOffsetToAccelEntrySymbol;
+  llvm::DenseSet<MCSymbol *> EmittedAccelEntrySymbols;
 
   DenseSet<uint32_t> getUniqueTags() const;
 
@@ -229,8 +234,8 @@ class Dwarf5AccelTableWriter : public AccelTableWriter {
   void emitBuckets() const;
   void emitStringOffsets() const;
   void emitAbbrevs() const;
-  void emitEntry(const DataT &Entry) const;
-  void emitData() const;
+  void emitEntry(const DataT &Entry);
+  void emitData();
 
 public:
   Dwarf5AccelTableWriter(
@@ -412,6 +417,9 @@ Dwarf5AccelTableWriter<DataT>::getUniformAttributes() const {
     UA.push_back({dwarf::DW_IDX_compile_unit, Form});
   }
   UA.push_back({dwarf::DW_IDX_die_offset, dwarf::DW_FORM_ref4});
+  if (EnableParents)
+    if constexpr (DataT::CanProvideParents)
+      UA.push_back({dwarf::DW_IDX_parent, dwarf::DW_FORM_ref4});
   return UA;
 }
 
@@ -470,10 +478,21 @@ void Dwarf5AccelTableWriter<DataT>::emitAbbrevs() const {
 }
 
 template <typename DataT>
-void Dwarf5AccelTableWriter<DataT>::emitEntry(const DataT &Entry) const {
+void Dwarf5AccelTableWriter<DataT>::emitEntry(const DataT &Entry) {
   auto AbbrevIt = Abbreviations.find(Entry.getDieTag());
   assert(AbbrevIt != Abbreviations.end() &&
          "Why wasn't this abbrev generated?");
+
+  // Create a label for this Entry, if not yet created by a IDX_parent
+  // reference to the same underlying DIE.
+  MCSymbol *&EntrySymbol = DieOffsetToAccelEntrySymbol[Entry.getDieOffset()];
+  if (EntrySymbol == nullptr)
+    EntrySymbol = Asm->createTempSymbol("symbol");
+
+  // Emit the label for this Entry, if a label hasn't yet been emitted for some
+  // other Entry of the same underlying DIE (a DIE may have multiple Entries).
+  if (EmittedAccelEntrySymbols.insert(EntrySymbol).second)
+    Asm->OutStreamer->emitLabel(EntrySymbol);
 
   Asm->emitULEB128(AbbrevIt->first, "Abbreviation code");
   for (const auto &AttrEnc : AbbrevIt->second) {
@@ -488,13 +507,27 @@ void Dwarf5AccelTableWriter<DataT>::emitEntry(const DataT &Entry) const {
       assert(AttrEnc.Form == dwarf::DW_FORM_ref4);
       Asm->emitInt32(Entry.getDieOffset());
       break;
+    case dwarf::DW_IDX_parent: {
+      if constexpr (DataT::CanProvideParents) {
+        // Parents should *always* exist: CUs or TUs are not placed in the
+        // table. Bad input is handled like a parent that is not indexed, i.e.,
+        // with an offset that is not in the table.
+        uint64_t ParentOffset = Entry.getParentDieOffset().value_or(-1);
+        MCSymbol *&ParentSymbol = DieOffsetToAccelEntrySymbol[ParentOffset];
+        if (ParentSymbol == nullptr)
+          ParentSymbol = Asm->createTempSymbol("symbol");
+        Asm->emitLabelDifference(ParentSymbol, EntryPool, 4);
+        break;
+      }
+      llvm_unreachable("IDX_parent requires DataT that supports it");
+    }
     default:
       llvm_unreachable("Unexpected index attribute!");
     }
   }
 }
 
-template <typename DataT> void Dwarf5AccelTableWriter<DataT>::emitData() const {
+template <typename DataT> void Dwarf5AccelTableWriter<DataT>::emitData() {
   Asm->OutStreamer->emitLabel(EntryPool);
   for (auto &Bucket : Contents.getBuckets()) {
     for (auto *Hash : Bucket) {
@@ -506,6 +539,11 @@ template <typename DataT> void Dwarf5AccelTableWriter<DataT>::emitData() const {
       Asm->emitInt8(0);
     }
   }
+  // Any labels not yet emitted refer to DIEs that are not present in the
+  // accelerator table. Point them to end of the table.
+  for (MCSymbol *Symbol : make_second_range(DieOffsetToAccelEntrySymbol))
+    if (EmittedAccelEntrySymbols.insert(Symbol).second)
+      Asm->OutStreamer->emitLabel(Symbol);
 }
 
 template <typename DataT>

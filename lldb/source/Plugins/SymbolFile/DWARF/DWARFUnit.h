@@ -183,6 +183,7 @@ public:
   DWARFDIE DIE() { return DWARFDIE(this, DIEPtr()); }
 
   DWARFDIE GetDIE(dw_offset_t die_offset);
+  llvm::StringRef PeekDIEName(dw_offset_t die_offset);
 
   DWARFUnit &GetNonSkeletonUnit();
 

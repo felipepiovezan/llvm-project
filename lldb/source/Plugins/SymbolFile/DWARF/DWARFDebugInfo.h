@@ -44,6 +44,7 @@ public:
   DWARFTypeUnit *GetTypeUnitForHash(uint64_t hash);
   bool ContainsTypeUnits();
   DWARFDIE GetDIE(const DIERef &die_ref);
+  llvm::StringRef PeekDIEName(const DIERef &die_ref);
 
   enum {
     eDumpFlag_Verbose = (1 << 0),  // Verbose dumping

@@ -634,6 +634,16 @@ std::optional<uint64_t> DWARFDebugNames::Entry::getCUOffset() const {
   return NameIdx->getCUOffset(*Index);
 }
 
+Expected<DWARFDebugNames::Entry>
+DWARFDebugNames::Entry::getParentDIEEntry() const {
+  // The offset of the accelerator table entry for the parent.
+  std::optional<DWARFFormValue> ParentEntryOff = lookup(dwarf::DW_IDX_parent);
+  if (!ParentEntryOff)
+    return createStringError(errc::illegal_byte_sequence,
+                             "Incorrectly terminated entry list.");
+  return NameIdx->getEntryAtRelativeOffset(ParentEntryOff->getRawUValue());
+}
+
 void DWARFDebugNames::Entry::dump(ScopedPrinter &W) const {
   W.startLine() << formatv("Abbrev: {0:x}\n", Abbr->Code);
   W.startLine() << formatv("Tag: {0}\n", Abbr->Tag);

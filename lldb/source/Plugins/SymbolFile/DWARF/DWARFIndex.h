@@ -53,6 +53,9 @@ public:
   virtual void GetTypes(const DWARFDeclContext &context,
                         llvm::function_ref<bool(DWARFDIE die)> callback) = 0;
   virtual void
+  GetFullyQualifiedType(const DWARFDeclContext &context,
+                        llvm::function_ref<bool(DWARFDIE die)> callback);
+  virtual void
   GetNamespaces(ConstString name,
                 llvm::function_ref<bool(DWARFDIE die)> callback) = 0;
   virtual void

@@ -66,6 +66,8 @@ public:
 
   const char *GetQualifiedName() const;
 
+  llvm::SmallVector<llvm::StringRef> GetQualifiedNameAsVector() const;
+
   // Same as GetQualifiedName, but the life time of the returned string will
   // be that of the LLDB session.
   lldb_private::ConstString GetQualifiedNameAsConstString() const {

@@ -1630,8 +1630,6 @@ SwiftASTContext *TypeSystemSwiftTypeRefForExpressions::GetSwiftASTContext(
       // clients holding on to the old context via a CompilerType will keep its
       // shared_ptr alive.
       m_swift_ast_context_map.erase(key);
-      LLDB_LOGF(GetLog(LLDBLog::Types),
-                "Recreating SwiftASTContext due to fatal errors.");
     }
 
     // Create a new SwiftASTContextForExpressions.
@@ -2147,7 +2145,7 @@ constexpr ExecutionContextScope *g_no_exe_ctx = nullptr;
       return result;                                                           \
     if (!GetSwiftASTContext(nullptr))                                          \
       return result;                                                           \
-    assert(Equivalent(result, GetSwiftASTContext(nullptr)->REFERENCE()) &&     \
+    assert((result == GetSwiftASTContext(nullptr)->REFERENCE()) &&             \
            "TypeSystemSwiftTypeRef diverges from SwiftASTContext");            \
     return result;                                                             \
   } while (0)
@@ -2167,11 +2165,6 @@ constexpr ExecutionContextScope *g_no_exe_ctx = nullptr;
     if ((TYPE) && !ReconstructType(TYPE))                                      \
       return result;                                                           \
     ExecutionContext _exe_ctx(EXE_CTX);                                        \
-    /* When in the error backstop the sc will point into the stdlib. */        \
-    if (auto *frame = _exe_ctx.GetFramePtr())                                  \
-      if (frame->GetSymbolContext(eSymbolContextFunction).GetFunctionName() == \
-          SwiftLanguageRuntime::GetErrorBackstopName())                        \
-        return result;                                                         \
     auto swift_scratch_ctx_lock = SwiftScratchContextLock(                     \
         _exe_ctx == ExecutionContext() ? nullptr : &_exe_ctx);                 \
     bool equivalent =                                                          \
@@ -4229,13 +4222,7 @@ bool TypeSystemSwiftTypeRef::DumpTypeValue(
                       ConstString(((StreamString *)&s)->GetString())) &&
            "TypeSystemSwiftTypeRef diverges from SwiftASTContext");
   });
-
-  // SwiftASTContext fails here, details explained in RemoteASTImport.test
-  if (StringRef(AsMangledName(type)) == "$s15RemoteASTImport14FromMainModuleCD")
-    return impl();
-
 #endif
-
   VALIDATE_AND_RETURN(impl, DumpTypeValue, type, exe_scope,
                       (ReconstructType(type, exe_scope), ast_s, format, data,
                        data_offset, data_byte_size, bitfield_bit_size,

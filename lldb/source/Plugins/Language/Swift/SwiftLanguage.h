@@ -75,6 +75,9 @@ public:
   ConstString
   GetDemangledFunctionNameWithoutArguments(Mangled mangled) const override;
 
+  virtual bool DemangledNameContainsPath(llvm::StringRef path,
+                                         ConstString demangled) const override;
+
   //------------------------------------------------------------------
   // Static Functions
   //------------------------------------------------------------------

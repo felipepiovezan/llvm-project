@@ -200,12 +200,28 @@ bool operator<(const SourceLoc lhs, const SourceLoc rhs) {
 }
 } // namespace
 
+#ifdef LLDB_ENABLE_SWIFT
+static void
+FilterArtificialAsyncContexts(llvm::SmallVectorImpl<SymbolContext> &sc_list) {
+  llvm::erase_if(sc_list, [](SymbolContext &sc) {
+    if (!sc.function || sc.GetLanguage() != LanguageType::eLanguageTypeSwift)
+      return false;
+    auto demangled = sc.function->GetMangled().GetDemangledName(&sc);
+    return demangled.GetStringRef().contains("await resume");
+  });
+}
+#endif // LLDB_ENABLE_SWIFT
+
 void BreakpointResolver::SetSCMatchesByLine(
     SearchFilter &filter, SymbolContextList &sc_list, bool skip_prologue,
     llvm::StringRef log_ident, uint32_t line, std::optional<uint16_t> column) {
   llvm::SmallVector<SymbolContext, 16> all_scs;
   for (uint32_t i = 0; i < sc_list.GetSize(); ++i)
     all_scs.push_back(sc_list[i]);
+
+#ifdef LLDB_ENABLE_SWIFT
+  FilterArtificialAsyncContexts(all_scs);
+#endif // LLDB_ENABLE_SWIFT
 
   while (all_scs.size()) {
     uint32_t closest_line = UINT32_MAX;

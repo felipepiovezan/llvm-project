@@ -1793,15 +1793,6 @@ SwiftLanguage::GetDemangledFunctionNameWithoutArguments(Mangled mangled) const {
   return mangled_name;
 }
 
-bool SwiftLanguage::DemangledNameContainsPath(llvm::StringRef path,
-                                         ConstString demangled) const {
-  // Do a naive name search first.
-  if (!Language::DemangledNameContainsPath(path, demangled))
-      return false;
-  // Filter out async funclets that are not the initial function entry point.
-  return !demangled.GetStringRef().contains("partial function");
-}
-
 //------------------------------------------------------------------
 // Static Functions
 //------------------------------------------------------------------

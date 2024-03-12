@@ -26,7 +26,16 @@
 
 namespace lldb_private {
 
-class Language : public PluginInterface {
+class LanguageProperties : public Properties {
+public:
+  LanguageProperties();
+
+  static llvm::StringRef GetSettingName();
+
+  bool GetEnableFilterForLineBreakpoints() const;
+};
+
+class Language : public PluginInterface, public LanguageProperties {
 public:
   class TypeScavenger {
   public:

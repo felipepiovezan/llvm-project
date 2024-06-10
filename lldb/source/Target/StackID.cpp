@@ -90,6 +90,24 @@ bool StackID::IsYounger(const StackID &lhs, const StackID &rhs,
   const lldb::addr_t lhs_cfa = lhs.GetCallFrameAddress();
   const lldb::addr_t rhs_cfa = rhs.GetCallFrameAddress();
 
+  // If both CFAs are on the heap and they are different, one of them is the
+  // async context for the other.
+  if (lhs_cfa != rhs_cfa && !lhs_cfa_on_stack && !rhs_cfa_on_stack) {
+    lldb::addr_t parent_ctx = lhs_cfa;
+    // Search for rhs_cfa in the parent chain of lhs_cfa: if it's found, then
+    // lhs is younger.
+    do {
+      Status error;
+      if (!process.ReadMemory(parent_ctx, &parent_ctx, 8, error)) {
+        // log warning.
+        break;
+      }
+      if (parent_ctx == rhs_cfa)
+        return true;
+    } while (parent_ctx != 0);
+    return false;
+  }
+
   // FIXME: We are assuming that the stacks grow downward in memory.  That's not
   // necessary, but true on
   // all the machines we care about at present.  If this changes, we'll have to

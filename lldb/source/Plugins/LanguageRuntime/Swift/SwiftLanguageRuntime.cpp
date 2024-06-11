@@ -2586,6 +2586,22 @@ lldb::addr_t SwiftLanguageRuntime::GetAsyncContext(RegisterContext *regctx) {
   return LLDB_INVALID_ADDRESS;
 }
 
+StringRef getNameFromPC(uint64_t pc_val, Target &target) {
+  Address pc;
+  pc.SetLoadAddress(pc_val, &target);
+  SymbolContext sc;
+  if (pc.IsValid())
+    if (!pc.CalculateSymbolContext(&sc, eSymbolContextFunction |
+                                            eSymbolContextSymbol))
+      return "";
+
+  if (sc.function)
+    return sc.function->GetMangled().GetMangledName().GetStringRef();
+  if (sc.symbol)
+    return sc.symbol->GetMangled().GetMangledName().GetStringRef();
+  return "";
+}
+
 // Examine the register state and detect the transition from a real
 // stack frame to an AsyncContext frame, or a frame in the middle of
 // the AsyncContext chain, and return an UnwindPlan for these situations.
@@ -2602,15 +2618,41 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   if (!regnums)
     return UnwindPlanSP();
 
+  Log *log(GetLog(LLDBLog::Felipe));
+  auto name = getNameFromPC(regctx->GetPC(), target);
+  LLDB_LOG(log,
+           ":::::: Trying to get runtime unwind plan from = {0} (pc = {1:x})",
+           name, regctx->GetPC());
+
+  {
+    auto async_reg_val = GetAsyncContext(regctx);
+    LLDB_LOG(log, "-> my async reg = {0:x}", async_reg_val);
+    addr_t deref_async_reg = LLDB_INVALID_ADDRESS;
+    Status error;
+    process_sp->ReadMemory(async_reg_val, &deref_async_reg, 8, error);
+    LLDB_LOG(log, "-> *(my async reg) = {0:x}", deref_async_reg);
+  }
+
   // If we can't fetch the fp reg, and we *can* fetch the async
   // context register, then we're in the middle of the AsyncContext
   // chain, return an UnwindPlan for that.
   addr_t fp = regctx->GetFP(LLDB_INVALID_ADDRESS);
+  LLDB_LOG(log, "-> fp = {0:x}", fp);
   if (fp == LLDB_INVALID_ADDRESS) {
-    if (GetAsyncContext(regctx) != LLDB_INVALID_ADDRESS)
+    if (GetAsyncContext(regctx) != LLDB_INVALID_ADDRESS) {
+      LLDB_LOG(log, "-> FP invalid, async register valid, use asyn->async plan");
       return GetFollowAsyncContextUnwindPlan(regctx, arch,
                                              behaves_like_zeroth_frame);
+    }
+    LLDB_LOG(log, "-> FP invalid, async register invalid, no unwind plan.");
     return UnwindPlanSP();
+  }
+
+  {
+    addr_t fp_minus8_read;
+    Status error;
+    process_sp->ReadMemory(fp - 8, &fp_minus8_read, 8, error);
+    LLDB_LOG(log, "-> *(fp - 8) = {0:x}", fp_minus8_read);
   }
 
   // If we're in the prologue of a function, don't provide a Swift async
@@ -2645,20 +2687,30 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   AddressRange prologue_range(func_start_addr, prologue_size);
   bool in_prologue = (func_start_addr == pc ||
                       prologue_range.ContainsLoadAddress(pc, &target));
-
+  bool indirect_context =
+      IsSwiftAsyncAwaitResumePartialFunctionSymbol(mangled_name.GetStringRef());
+  LLDB_LOG(log, "-> In prologue = {0}", in_prologue);
+  LLDB_LOG(log, "-> indirect_ctx = {0}", indirect_context);
   if (in_prologue) {
-    if (!IsAnySwiftAsyncFunctionSymbol(mangled_name.GetStringRef()))
+    if (!IsAnySwiftAsyncFunctionSymbol(mangled_name.GetStringRef())) {
+      LLDB_LOG(log, "-> Not a swift async function. Returning null plan.");
       return UnwindPlanSP();
+    }
   } else {
     addr_t saved_fp = LLDB_INVALID_ADDRESS;
     Status error;
     if (!process_sp->ReadMemory(fp, &saved_fp, 8, error))
       return UnwindPlanSP();
 
+    LLDB_LOG(log, "-> saved_fp = {0:x}", saved_fp);
     // Get the high nibble of the dreferenced fp; if the 60th bit is set,
     // this is the transition to a swift async AsyncContext chain.
-    if ((saved_fp & (0xfULL << 60)) >> 60 != 1)
+    if ((saved_fp & (0xfULL << 60)) >> 60 != 1) {
+      LLDB_LOG(log, "-> 60th bit not tagged. Returning null plan.");
       return UnwindPlanSP();
+    }
+    LLDB_LOG(log, "-> saved_fp 60th bit unset = {0:x}",
+             saved_fp & ~(1ULL << 60));
   }
 
   // The coroutine funclets split from an async function have 2 different ABIs:
@@ -2668,9 +2720,6 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   //    needs to be dereferenced to get the actual function's context.
   // The debug info for locals reflects this difference, so our unwinding of the
   // context register needs to reflect it too.
-  bool indirect_context =
-      IsSwiftAsyncAwaitResumePartialFunctionSymbol(mangled_name.GetStringRef());
-
   UnwindPlan::RowSP row(new UnwindPlan::Row);
   const int32_t ptr_size = 8;
   row->SetOffset(0);
@@ -2711,17 +2760,22 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
     llvm_unreachable("Unsupported architecture");
 
   if (in_prologue) {
-    if (indirect_context)
+    if (indirect_context) {
       row->GetCFAValue().SetIsRegisterDereferenced(regnums->async_ctx_regnum);
-    else
+      LLDB_LOG(log, "-> my CFA = deref(async_reg)");
+    } else {
       row->GetCFAValue().SetIsRegisterPlusOffset(regnums->async_ctx_regnum, 0);
+      LLDB_LOG(log, "-> my CFA = async_reg");
+    }
   } else {
     row->GetCFAValue().SetIsDWARFExpression(expr, expr_size);
+    LLDB_LOG(log, "-> my CFA = deref(fp - 8)");
   }
 
   if (indirect_context) {
     if (in_prologue) {
       row->SetRegisterLocationToSame(regnums->async_ctx_regnum, false);
+      LLDB_LOG(log, "-> parent async_reg = async_reg");
     } else {
       // In a "resume" coroutine, the passed context argument needs to be
       // dereferenced once to get the context. This is reflected in the debug
@@ -2733,12 +2787,16 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
              "Should skip a deref");
       row->SetRegisterLocationToIsDWARFExpression(regnums->async_ctx_regnum,
                                                   expr, expr_size - 1, false);
+      LLDB_LOG(log, "-> parent async_reg = fp - 8");
     }
   } else {
     // In the first part of a split async function, the context is passed
     // directly, so we can use the CFA value directly.
+    // Assuming the parent is always indirect, then yes, the parent's async
+    // register is my CFA.
     row->SetRegisterLocationToIsCFAPlusOffset(regnums->async_ctx_regnum, 0,
                                               false);
+    LLDB_LOG(log, "-> parent async_reg = cfa");
     // The fact that we are in this case needs to be communicated to the frames
     // below us as they need to react differently. There is no good way to
     // expose this, so we set another dummy register to communicate this state.
@@ -2748,9 +2806,11 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
     row->SetRegisterLocationToIsDWARFExpression(
         regnums->dummy_regnum, g_dummy_dwarf_expression,
         sizeof(g_dummy_dwarf_expression), false);
+    LLDB_LOG(log, "-> defining dummy register.");
   }
   row->SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
                                             false);
+  LLDB_LOG(log, "-> parent pc = *(cfa + 8)");
 
   row->SetUnspecifiedRegistersAreUndefined(true);
 
@@ -2769,6 +2829,7 @@ static UnwindPlanSP
 GetFollowAsyncContextUnwindPlan(RegisterContext *regctx, ArchSpec &arch,
                                 bool &behaves_like_zeroth_frame) {
   LLDB_SCOPED_TIMER();
+  Log *log(GetLog(LLDBLog::Felipe));
 
   UnwindPlan::RowSP row(new UnwindPlan::Row);
   const int32_t ptr_size = 8;
@@ -2787,7 +2848,9 @@ GetFollowAsyncContextUnwindPlan(RegisterContext *regctx, ArchSpec &arch,
   if (regctx->ReadRegisterAsUnsigned(regnums->dummy_regnum, (uint64_t)-1ll) !=
       (uint64_t)-1ll) {
     row->GetCFAValue().SetIsRegisterDereferenced(regnums->async_ctx_regnum);
+    LLDB_LOG(log, "-> my cfa = *(async_reg)");
     row->SetRegisterLocationToSame(regnums->async_ctx_regnum, false);
+    LLDB_LOG(log, "-> parent async_reg = async_reg");
   } else {
     static const uint8_t async_dwarf_expression_x86_64[] = {
         llvm::dwarf::DW_OP_regx, dwarf_r14_x86_64, // DW_OP_regx, reg
@@ -2818,12 +2881,15 @@ GetFollowAsyncContextUnwindPlan(RegisterContext *regctx, ArchSpec &arch,
     assert(expression[expr_size - 1] == llvm::dwarf::DW_OP_deref &&
            "Should skip a deref");
     row->GetCFAValue().SetIsDWARFExpression(expression, expr_size);
+    LLDB_LOG(log, "-> my cfa = **(async_reg)");
     row->SetRegisterLocationToIsDWARFExpression(
         regnums->async_ctx_regnum, expression, expr_size - 1, false);
+    LLDB_LOG(log, "-> parent async_reg = *(async_reg)");
   }
 
   row->SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
                                             false);
+  LLDB_LOG(log, "-> parent pc = *(cfa + ptr_size)");
 
   row->SetUnspecifiedRegistersAreUndefined(true);
 

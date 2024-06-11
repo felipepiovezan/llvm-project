@@ -1,0 +1,69 @@
+From 7fd14bc5cbdf013f683d03cb3b3d54dd9d93fe6e Mon Sep 17 00:00:00 2001
+From: Felipe de Azevedo Piovezan <fpiovezan@apple.com>
+Date: Tue, 23 Jul 2024 15:54:42 -0700
+Subject: [PATCH 1/1] [LLDB][swift][nfc] Make unwind method a member
+
+This will enable subsequent commits to introduce calls to other member functions
+from that method.
+---
+ .../LanguageRuntime/Swift/SwiftLanguageRuntime.cpp   | 12 ++++--------
+ .../LanguageRuntime/Swift/SwiftLanguageRuntime.h     |  6 ++++++
+ 2 files changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/lldb/source/Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.cpp b/lldb/source/Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.cpp
+index 1288d2e39243..0d12accd0ec5 100644
+--- a/lldb/source/Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.cpp
++++ b/lldb/source/Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.cpp
+@@ -99,10 +99,6 @@ static bool IsModuleSwiftRuntime(lldb_private::Process &process,
+   return module.GetFileSpec().GetFilename() == GetStandardLibraryName(process);
+ }
+ 
+-static UnwindPlanSP
+-GetFollowAsyncContextUnwindPlan(RegisterContext *regctx, ArchSpec &arch,
+-                                bool &behaves_like_zeroth_frame);
+-
+ AppleObjCRuntimeV2 *
+ SwiftLanguageRuntime::GetObjCRuntime(lldb_private::Process &process) {
+   if (auto objc_runtime = ObjCLanguageRuntime::Get(process)) {
+@@ -2641,7 +2637,7 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
+   if (fp == LLDB_INVALID_ADDRESS) {
+     if (GetAsyncContext(regctx) != LLDB_INVALID_ADDRESS) {
+       LLDB_LOG(log, "-> FP invalid, async register valid, use asyn->async plan");
+-      return GetFollowAsyncContextUnwindPlan(regctx, arch,
++      return GetFollowAsyncContextUnwindPlan(process_sp, regctx, arch,
+                                              behaves_like_zeroth_frame);
+     }
+     LLDB_LOG(log, "-> FP invalid, async register invalid, no unwind plan.");
+@@ -2825,9 +2821,9 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
+ 
+ // Creates an UnwindPlan for following the AsyncContext chain
+ // up the stack, from a current AsyncContext frame.
+-static UnwindPlanSP
+-GetFollowAsyncContextUnwindPlan(RegisterContext *regctx, ArchSpec &arch,
+-                                bool &behaves_like_zeroth_frame) {
++UnwindPlanSP SwiftLanguageRuntime::GetFollowAsyncContextUnwindPlan(
++    ProcessSP process_sp, RegisterContext *regctx, ArchSpec &arch,
++    bool &behaves_like_zeroth_frame) {
+   LLDB_SCOPED_TIMER();
+   Log *log(GetLog(LLDBLog::Felipe));
+ 
+diff --git a/lldb/source/Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.h b/lldb/source/Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.h
+index fb3061243a0a..06cc44c1a093 100644
+--- a/lldb/source/Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.h
++++ b/lldb/source/Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.h
+@@ -482,6 +482,12 @@ protected:
+   bool GetTargetOfPartialApply(SymbolContext &curr_sc, ConstString &apply_name,
+                                SymbolContext &sc);
+   AppleObjCRuntimeV2 *GetObjCRuntime();
++
++private:
++  lldb::UnwindPlanSP
++  GetFollowAsyncContextUnwindPlan(lldb::ProcessSP process_sp,
++                                  RegisterContext *regctx, ArchSpec &arch,
++                                  bool &behaves_like_zeroth_frame);
+ };
+ 
+ } // namespace lldb_private
+-- 
+2.39.5 (Apple Git-154)
+

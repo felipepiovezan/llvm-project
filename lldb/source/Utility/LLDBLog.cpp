@@ -30,6 +30,7 @@ static constexpr Log::Category g_categories[] = {
      {"log broadcaster, listener and event queue activities"},
      LLDBLog::Events},
     {{"expr"}, {"log expressions"}, LLDBLog::Expressions},
+    {{"felipe"}, {"log step related activities"}, LLDBLog::Felipe},
     {{"formatters"},
      {"log data formatters related activities"},
      LLDBLog::DataFormatters},

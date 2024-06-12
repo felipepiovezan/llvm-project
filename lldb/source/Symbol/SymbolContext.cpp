@@ -98,7 +98,7 @@ bool SymbolContext::DumpStopContext(Stream *s, ExecutionContextScope *exe_scope,
       if (!name)
         name = function->GetName(this);
       if (name)
-        name.Dump(s);
+        function->GetMangled().Dump(s);
     }
 
     if (addr.IsValid()) {

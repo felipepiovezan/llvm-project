@@ -38,7 +38,18 @@ using namespace lldb_private;
 
 uint32_t ThreadPlanStepOut::s_default_flag_values = 0;
 
-// ThreadPlanStepOut: Step out of the current frame
+void dump(const StackFrameSP frame, Process& process) {
+  StreamString s;
+  s << "\n";
+  frame->Dump(&s, true, false);
+  s << "\n";
+  frame->GetStackID().IsCFAOnStack(process);
+  frame->GetStackID().Dump(&s);
+  s << "\n";
+  Log *log = GetLog(LLDBLog::Step);
+  LLDB_LOGF(log, s.GetString().data());
+}
+
 ThreadPlanStepOut::ThreadPlanStepOut(
     Thread &thread, SymbolContext *context, bool first_insn, bool stop_others,
     Vote report_stop_vote, Vote report_run_vote, uint32_t frame_idx,
@@ -83,6 +94,8 @@ ThreadPlanStepOut::ThreadPlanStepOut(
   }
 
   m_step_out_to_id = return_frame_sp->GetStackID();
+  dump(immediate_return_from_sp, m_process);
+  dump(return_frame_sp, m_process);
   m_immediate_step_from_id = immediate_return_from_sp->GetStackID();
 
   // If the frame directly below the one we are returning to is inlined, we
@@ -398,6 +411,7 @@ bool ThreadPlanStepOut::ShouldStop(Event *event_ptr) {
   }
 
   if (!done) {
+    dump(GetThread().GetStackFrameAtIndex(0), m_process);
     StackID frame_zero_id = GetThread().GetStackFrameAtIndex(0)->GetStackID();
     done = !IsYounger(frame_zero_id, m_step_out_to_id);
   }

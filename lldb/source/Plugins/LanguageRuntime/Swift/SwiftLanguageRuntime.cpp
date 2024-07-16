@@ -2613,12 +2613,6 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
     return UnwindPlanSP();
   }
 
-  // If we're in the prologue of a function, don't provide a Swift async
-  // unwind plan.  We can be tricked by unmodified caller-registers that
-  // make this look like an async frame when this is a standard ABI function
-  // call, and the parent is the async frame.
-  // This assumes that the frame pointer register will be modified in the
-  // prologue.
   Address pc;
   pc.SetLoadAddress(regctx->GetPC(), &target);
   SymbolContext sc;
@@ -2648,6 +2642,12 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
 
   if (in_prologue) {
     if (!IsAnySwiftAsyncFunctionSymbol(mangled_name.GetStringRef()))
+      // If we're in the prologue of a function, don't provide a Swift async
+      // unwind plan.  We can be tricked by unmodified caller-registers that
+      // make this look like an async frame when this is a standard ABI function
+      // call, and the parent is the async frame.
+      // This assumes that the frame pointer register will be modified in the
+      // prologue.
       return UnwindPlanSP();
   } else {
     addr_t saved_fp = LLDB_INVALID_ADDRESS;

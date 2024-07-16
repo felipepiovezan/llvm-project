@@ -2827,9 +2827,19 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
         sizeof(g_dummy_dwarf_expression), false);
     LLDB_LOG(log, "-> defining dummy register.");
   }
-  row->SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
-                                            false);
-  LLDB_LOG(log, "-> parent pc = *(cfa + 8)");
+  static const uint8_t pc_expr[] = {
+      llvm::dwarf::DW_OP_breg29, // DW_OP_breg29, register 29 == fp
+      0x78,                      //    sleb128 -8 (ptrsize)
+      llvm::dwarf::DW_OP_deref,
+      llvm::dwarf::DW_OP_plus_uconst,
+      0x8, // continuation
+      llvm::dwarf::DW_OP_deref,
+      llvm::dwarf::DW_OP_plus_uconst,
+      0x18
+  };
+  row->SetRegisterLocationToIsDWARFExpression(regnums->pc_regnum, pc_expr,
+                                              sizeof(pc_expr), false);
+  LLDB_LOG(log, "-> parent pc = *(cfa + ptr_size) + 24");
 
   row->SetUnspecifiedRegistersAreUndefined(true);
 
@@ -2906,9 +2916,18 @@ GetFollowAsyncContextUnwindPlan(RegisterContext *regctx, ArchSpec &arch,
     LLDB_LOG(log, "-> parent async_reg = *(async_reg)");
   }
 
-  row->SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
-                                            false);
-  LLDB_LOG(log, "-> parent pc = *(cfa + ptr_size)");
+  static const uint8_t pc_expr[] = {
+      llvm::dwarf::DW_OP_regx, arm64_dwarf::x22,
+      llvm::dwarf::DW_OP_deref,  // this gets to address of *our* context.
+      llvm::dwarf::DW_OP_plus_uconst,
+      0x8, // address of our continuation ptr
+      llvm::dwarf::DW_OP_deref, // read the continuation ptr
+      llvm::dwarf::DW_OP_plus_uconst,
+      0x18 // offset prologue
+  };
+  row->SetRegisterLocationToIsDWARFExpression(regnums->pc_regnum, pc_expr,
+                                              sizeof(pc_expr), false);
+  LLDB_LOG(log, "-> parent pc = *(cfa + ptr_size) + 24");
 
   row->SetUnspecifiedRegistersAreUndefined(true);
 

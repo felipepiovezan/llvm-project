@@ -2586,6 +2586,29 @@ lldb::addr_t SwiftLanguageRuntime::GetAsyncContext(RegisterContext *regctx) {
   return LLDB_INVALID_ADDRESS;
 }
 
+std::pair<StringRef, AddressRange>
+getMangledNameAndPrologueRange(Address addr, Target &target) {
+  SymbolContext sc;
+  if (!addr.CalculateSymbolContext(&sc, eSymbolContextFunction |
+                                            eSymbolContextSymbol))
+    return {"", AddressRange()};
+
+  if (sc.function == nullptr && sc.symbol == nullptr)
+    return {"", AddressRange()};
+
+  Address func_start_addr =
+      sc.function ? sc.function->GetAddressRange().GetBaseAddress()
+                  : sc.symbol->GetAddress();
+  uint32_t prologue_size = sc.function ? sc.function->GetPrologueByteSize()
+                                       : sc.symbol->GetPrologueByteSize();
+  ConstString mangled_name = sc.function
+                                 ? sc.function->GetMangled().GetMangledName()
+                                 : sc.symbol->GetMangled().GetMangledName();
+  AddressRange prologue_range(func_start_addr, prologue_size);
+
+  return {mangled_name.GetStringRef(), prologue_range};
+}
+
 // Examine the register state and detect the transition from a real
 // stack frame to an AsyncContext frame, or a frame in the middle of
 // the AsyncContext chain, and return an UnwindPlan for these situations.
@@ -2615,33 +2638,19 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
 
   Address pc;
   pc.SetLoadAddress(regctx->GetPC(), &target);
-  SymbolContext sc;
-  if (pc.IsValid())
-    if (!pc.CalculateSymbolContext(&sc, eSymbolContextFunction |
-                                            eSymbolContextSymbol))
-      return UnwindPlanSP();
-
-  Address func_start_addr;
-  uint32_t prologue_size;
-  ConstString mangled_name;
-  if (sc.function) {
-    func_start_addr = sc.function->GetAddressRange().GetBaseAddress();
-    prologue_size = sc.function->GetPrologueByteSize();
-    mangled_name = sc.function->GetMangled().GetMangledName();
-  } else if (sc.symbol) {
-    func_start_addr = sc.symbol->GetAddress();
-    prologue_size = sc.symbol->GetPrologueByteSize();
-    mangled_name = sc.symbol->GetMangled().GetMangledName();
-  } else {
+  if (!pc.IsValid())
     return UnwindPlanSP();
-  }
 
-  AddressRange prologue_range(func_start_addr, prologue_size);
-  bool in_prologue = (func_start_addr == pc ||
+  auto [mangled, prologue_range] = getMangledNameAndPrologueRange(pc, target);
+  // If we can't find a proper prologue, bail.
+  if (!prologue_range.GetBaseAddress().IsValid())
+    return UnwindPlanSP();
+
+  bool in_prologue = (prologue_range.GetBaseAddress() == pc ||
                       prologue_range.ContainsLoadAddress(pc, &target));
 
   if (in_prologue) {
-    if (!IsAnySwiftAsyncFunctionSymbol(mangled_name.GetStringRef()))
+    if (!IsAnySwiftAsyncFunctionSymbol(mangled))
       // If we're in the prologue of a function, don't provide a Swift async
       // unwind plan.  We can be tricked by unmodified caller-registers that
       // make this look like an async frame when this is a standard ABI function
@@ -2668,8 +2677,7 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   //    needs to be dereferenced to get the actual function's context.
   // The debug info for locals reflects this difference, so our unwinding of the
   // context register needs to reflect it too.
-  bool indirect_context =
-      IsSwiftAsyncAwaitResumePartialFunctionSymbol(mangled_name.GetStringRef());
+  bool indirect_context = IsSwiftAsyncAwaitResumePartialFunctionSymbol(mangled);
 
   UnwindPlan::RowSP row(new UnwindPlan::Row);
   const int32_t ptr_size = 8;

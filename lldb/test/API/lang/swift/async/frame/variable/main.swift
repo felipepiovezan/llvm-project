@@ -2,6 +2,10 @@ func randInt(_ i: Int) async -> Int {
   return Int.random(in: 1...i)
 }
 
+func break_three() async {
+  print("break three")
+}
+
 func inner<T>(_ t: T) async {
   // d is dynamically allocated by swift_task_alloc() because its size
   // is unknown.
@@ -12,6 +16,7 @@ func inner<T>(_ t: T) async {
   use(a, b)
   use(d)
   print("break two")
+  await break_three()
 }
 
 func use<T>(_ t: T...) {}

@@ -47,3 +47,26 @@ class TestCase(lldbtest.TestBase):
         self.assertGreater(b.unsigned, 0)
         d = frame.FindVariable("d")
         lldbutil.check_variable(self, d, False, value='23')
+
+    @swiftTest
+    @skipIf(oslist=['windows', 'linux'])
+    @expectedFailure("rdar://132102448")
+    def test_frame_var_non_zeroth_frame(self):
+        """Test `frame variable` in async functions for non-zeroth frames"""
+        self.build()
+        source_file = lldb.SBFileSpec("main.swift")
+        target, process, _, _ = lldbutil.run_to_source_breakpoint(
+            self, "break three", source_file)
+
+        frame = process.GetSelectedThread().frames[1]
+        self.assertIn("inner", frame.GetFunctionName())
+        print(frame.GetFunctionName())
+        a = frame.FindVariable("a")
+        b = frame.FindVariable("b")
+        d = frame.FindVariable("d")
+        self.assertTrue(a.IsValid())
+        self.assertGreater(a.unsigned, 0)
+        self.assertTrue(b.IsValid())
+        self.assertGreater(a.unsigned, 0)
+        self.assertTrue(d.IsValid())
+        lldbutil.check_variable(self, d, False, value='23')

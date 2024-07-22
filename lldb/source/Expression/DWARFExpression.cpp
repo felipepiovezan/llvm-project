@@ -786,6 +786,8 @@ static bool Evaluate_DW_OP_entry_value(std::vector<Value> &stack,
     return false;
   }
 
+  LLDB_LOG(log,
+           "Evaluate_DW_OP_entry_value: result =  {0:x}", result.GetScalar().ULongLong(0));
   stack.push_back(result);
   return true;
 }

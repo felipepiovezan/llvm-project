@@ -2804,10 +2804,29 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
         sizeof(g_dummy_dwarf_expression), false);
     LLDB_LOG(log, "-> defining dummy register.");
   }
-  row->SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
-                                            false);
-  LLDB_LOG(log, "-> parent pc = *(cfa + 8)");
 
+  auto pc_after_prologue = [&]() -> std::optional<addr_t> {
+    // If we're in the prologue, we can just use our x22, it is unmodified.
+    if (in_prologue)
+      return TrySkipVirtualParentProlog(GetAsyncContext(regctx), *process_sp,
+                                        indirect_context);
+
+    // Otherwise, check the ABI guaranteed slot for the saved x22 reg: *(fp - 8).
+    Status error;
+    addr_t x22_entry_value;
+    process_sp->ReadMemory(fp - ptr_size, &x22_entry_value, ptr_size, error);
+    if (error.Fail())
+      return {};
+    return TrySkipVirtualParentProlog(x22_entry_value, *process_sp,
+                                      indirect_context);
+  }();
+
+  if (pc_after_prologue)
+    row->SetRegisterLocationToIsConstant(regnums->pc_regnum, *pc_after_prologue,
+                                         false);
+  else
+    row->SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
+                                              false);
   row->SetUnspecifiedRegistersAreUndefined(true);
 
   UnwindPlanSP plan = std::make_shared<UnwindPlan>(lldb::eRegisterKindDWARF);
@@ -2836,13 +2855,15 @@ UnwindPlanSP SwiftLanguageRuntime::GetFollowAsyncContextUnwindPlan(
   if (!regnums)
     return UnwindPlanSP();
 
+  const bool is_indirect =
+      regctx->ReadRegisterAsUnsigned(regnums->dummy_regnum, (uint64_t)-1ll) ==
+      (uint64_t)-1ll;
   // In the general case, the async register setup by the frame above us
   // should be dereferenced twice to get our context, except when the frame
   // above us is an async frame on the OS stack that takes its context directly
   // (see discussion in GetRuntimeUnwindPlan()). The availability of
   // dummy_regnum is used as a marker for this situation.
-  if (regctx->ReadRegisterAsUnsigned(regnums->dummy_regnum, (uint64_t)-1ll) !=
-      (uint64_t)-1ll) {
+  if (!is_indirect) {
     row->GetCFAValue().SetIsRegisterDereferenced(regnums->async_ctx_regnum);
     LLDB_LOG(log, "-> my cfa = *(async_reg)");
     row->SetRegisterLocationToSame(regnums->async_ctx_regnum, false);
@@ -2883,9 +2904,18 @@ UnwindPlanSP SwiftLanguageRuntime::GetFollowAsyncContextUnwindPlan(
     LLDB_LOG(log, "-> parent async_reg = *(async_reg)");
   }
 
-  row->SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
-                                            false);
-  LLDB_LOG(log, "-> parent pc = *(cfa + ptr_size)");
+  // Since we pretend x22 is the register "passed" to our child frame, there
+  // is always at least one indirection.
+  unsigned num_indirections = 1 + is_indirect;
+  if (std::optional<addr_t> pc_after_prologue = TrySkipVirtualParentProlog(
+          GetAsyncContext(regctx), *process_sp, num_indirections)) {
+    row->SetRegisterLocationToIsConstant(regnums->pc_regnum, *pc_after_prologue,
+                                         false);
+    LLDB_LOG(log, "-> desired parent pc = pc + prologue_size = {0:x}",
+             *pc_after_prologue);
+  } else
+    row->SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
+                                              false);
 
   row->SetUnspecifiedRegistersAreUndefined(true);
 
@@ -2899,4 +2929,49 @@ UnwindPlanSP SwiftLanguageRuntime::GetFollowAsyncContextUnwindPlan(
   return plan;
 }
 
+std::optional<lldb::addr_t> SwiftLanguageRuntime::TrySkipVirtualParentProlog(
+    lldb::addr_t async_reg_val, Process &process, unsigned num_indirections) {
+  if (async_reg_val == LLDB_INVALID_ADDRESS || async_reg_val == 0)
+    return {};
+
+  const auto ptr_size = 8;
+  Status error;
+
+  // Compute the CFA of this frame.
+  addr_t cfa = async_reg_val;
+  while (num_indirections--) {
+    process.ReadMemory(cfa, &cfa, ptr_size, error);
+    if (error.Fail())
+      return {};
+  }
+
+  // The last funclet will have a zero CFA, we don't want to read that.
+  if (cfa == 0)
+    return {};
+
+  // Get the PC of the parent frame, i.e. the continuation pointer, which is
+  // the second field of the CFA.
+  addr_t pc_location = cfa + ptr_size;
+  addr_t pc_value = LLDB_INVALID_ADDRESS;
+  process.ReadMemory(pc_location, &pc_value, ptr_size, error);
+  if (error.Fail())
+    return {};
+
+  Address pc;
+  Target &target(process.GetTarget());
+  pc.SetLoadAddress(pc_value, &target);
+  if (!pc.IsValid())
+    return {};
+
+  SymbolContext sc;
+  if (!pc.CalculateSymbolContext(&sc,
+                                 eSymbolContextFunction | eSymbolContextSymbol))
+    return {};
+  if (!sc.symbol && !sc.function)
+    return {};
+
+  auto prologue_size = sc.symbol ? sc.symbol->GetPrologueByteSize()
+                                 : sc.function->GetPrologueByteSize();
+  return pc_value + prologue_size;
+}
 } // namespace lldb_private

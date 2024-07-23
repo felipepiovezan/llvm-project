@@ -482,6 +482,12 @@ protected:
   bool GetTargetOfPartialApply(SymbolContext &curr_sc, ConstString &apply_name,
                                SymbolContext &sc);
   AppleObjCRuntimeV2 *GetObjCRuntime();
+
+private:
+  lldb::UnwindPlanSP
+  GetFollowAsyncContextUnwindPlan(lldb::ProcessSP process_sp,
+                                  RegisterContext *regctx, ArchSpec &arch,
+                                  bool &behaves_like_zeroth_frame);
 };
 
 } // namespace lldb_private

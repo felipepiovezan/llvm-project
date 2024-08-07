@@ -645,6 +645,12 @@ bool DwarfExpression::addExpression(
       emitUnsigned(Op->getArg(0));
       emitSigned(Op->getArg(1));
       break;
+    case dwarf::DW_OP_call_frame_cfa:
+      emitOp(dwarf::DW_OP_call_frame_cfa);
+      break;
+    case dwarf::DW_OP_drop:
+      emitOp(dwarf::DW_OP_drop);
+      break;
     default:
       llvm_unreachable("unhandled opcode found in expression");
     }

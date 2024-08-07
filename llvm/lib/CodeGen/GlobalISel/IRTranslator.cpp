@@ -2015,6 +2015,18 @@ bool IRTranslator::translateKnownIntrinsic(const CallInst &CI, Intrinsic::ID ID,
       return true;
     }
 
+    if (auto *CI = dyn_cast<ConstantInt>(Address);
+        CI && CI->getBitWidth() <= 64) {
+      auto MIB = MIRBuilder.buildInstrNoInsert(TargetOpcode::DBG_VALUE);
+      auto *Expr = DIExpression::append(DI.getExpression(), dwarf::DW_OP_deref);
+      MIB.addImm(CI->getZExtValue());
+      MIB.addImm(0)
+          .addMetadata(DI.getVariable())
+          .addMetadata(Expr);
+      MIRBuilder.insertInstr(MIB);
+      return true;
+    }
+
     if (translateIfEntryValueArgument(DI))
       return true;
 

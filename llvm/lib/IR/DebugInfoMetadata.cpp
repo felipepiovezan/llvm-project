@@ -1486,6 +1486,8 @@ bool DIExpression::isValid() const {
     case dwarf::DW_OP_ge:
     case dwarf::DW_OP_lt:
     case dwarf::DW_OP_le:
+    case dwarf::DW_OP_call_frame_cfa:
+    case dwarf::DW_OP_drop:
       break;
     }
   }

@@ -2875,13 +2875,6 @@ void coro::salvageDebugInfo(
   const bool IsSwiftAsyncArg =
       StorageAsArg && StorageAsArg->hasAttribute(Attribute::SwiftAsync);
 
-  // Swift async arguments are described by an entry value of the ABI-defined
-  // register containing the coroutine context.
-  // Entry values in variadic expressions are not supported.
-  if (IsSwiftAsyncArg && UseEntryValue && !Expr->isEntryValue() &&
-      Expr->isSingleLocationExpression())
-    Expr = DIExpression::prepend(Expr, DIExpression::EntryValue);
-
   // If the coroutine frame is an Argument, store it in an alloca to improve
   // its availability (e.g. registers may be clobbered).
   // Avoid this if optimizations are enabled (they would remove the alloca) or
@@ -2905,7 +2898,21 @@ void coro::salvageDebugInfo(
     Expr = DIExpression::prepend(Expr, DIExpression::DerefBefore);
   }
 
-  DVI->replaceVariableLocationOp(OriginalStorage, Storage);
+  // Swift async arguments are described by an entry value of the ABI-defined
+  // register containing the coroutine context.
+  // Entry values in variadic expressions are not supported.
+  if (auto SingleLocElts = Expr->getSingleLocationExpressionElements();
+      SingleLocElts && IsSwiftAsyncArg && UseEntryValue &&
+      !Expr->isEntryValue()) {
+    auto IsIndirect = SingleLocElts->front() == dwarf::DW_OP_deref;
+    SmallVector<uint64_t> NewOps = {dwarf::DW_OP_drop, dwarf::DW_OP_call_frame_cfa};
+    llvm::append_range(NewOps, IsIndirect ? SingleLocElts->drop_front()
+                                          : *SingleLocElts);
+    Expr = DIExpression::get(F->getContext(), NewOps);
+    DVI->replaceVariableLocationOp(OriginalStorage, Builder.getInt64(0));
+  } else
+    DVI->replaceVariableLocationOp(OriginalStorage, Storage);
+
   DVI->setExpression(Expr);
   // We only hoist dbg.declare today since it doesn't make sense to hoist
   // dbg.value since it does not have the same function wide guarantees that

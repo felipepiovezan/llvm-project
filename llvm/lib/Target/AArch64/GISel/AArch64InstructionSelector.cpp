@@ -2439,8 +2439,11 @@ bool AArch64InstructionSelector::select(MachineInstr &I) {
     if (I.isCopy())
       return selectCopy(I, TII, MRI, TRI, RBI);
 
-    if (I.isDebugInstr())
+    if (I.isDebugInstr()) {
+      LLVM_DEBUG(dbgs() << "In function: " << I.getMF()->getName());
+      I.dump();
       return selectDebugInstr(I, MRI, RBI);
+    }
 
     return true;
   }

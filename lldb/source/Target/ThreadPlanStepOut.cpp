@@ -83,6 +83,12 @@ ThreadPlanStepOut::ThreadPlanStepOut(
   }
 
   m_step_out_to_id = return_frame_sp->GetStackID();
+  LLDB_LOGF(log,
+            "======= ThreadPlanStepOut(%p): Return frame: PC= 0x%" PRIx64
+            ", CFA = 0x%" PRIx64 " on stack = %d",
+            static_cast<void *>(this), m_step_out_to_id.GetPC(),
+            m_step_out_to_id.GetCallFrameAddress(),
+            m_step_out_to_id.IsCFAOnStack(m_process));
   m_immediate_step_from_id = immediate_return_from_sp->GetStackID();
 
   // If the frame directly below the one we are returning to is inlined, we
@@ -400,6 +406,16 @@ bool ThreadPlanStepOut::ShouldStop(Event *event_ptr) {
   if (!done) {
     StackID frame_zero_id = GetThread().GetStackFrameAtIndex(0)->GetStackID();
     done = !IsYounger(frame_zero_id, m_step_out_to_id);
+    Log *log = GetLog(LLDBLog::Step);
+    LLDB_LOGF(log, "======= ThreadPlanStepOut(%p) Comparing frames:",
+              static_cast<void *>(this));
+    LLDB_LOGF(log, "PC= 0x%" PRIx64 ", CFA = 0x%" PRIx64 " on stack = %d",
+              frame_zero_id.GetPC(), frame_zero_id.GetCallFrameAddress(),
+              frame_zero_id.IsCFAOnStack(m_process));
+    LLDB_LOGF(log, done ? "NOT YOUNGER than:" : "YOUNGER than:");
+    LLDB_LOGF(log, "PC= 0x%" PRIx64 ", CFA = 0x%" PRIx64 " on stack = %d",
+              m_step_out_to_id.GetPC(), m_step_out_to_id.GetCallFrameAddress(),
+              m_step_out_to_id.IsCFAOnStack(m_process));
   }
 
   // The normal step out computations think we are done, so all we need to do

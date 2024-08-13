@@ -68,6 +68,12 @@ public:
   ///     true if this memory address is in the process address space.
   bool IsMapped();
 
+  /// Check if this memory address belongs to the stack of a thread.
+  ///
+  /// \return
+  ///     true if this memory address is in the stack of a thread.
+  bool IsStackMemory();
+
   /// Returns the name of the memory region mapped at the given
   /// address.
   ///

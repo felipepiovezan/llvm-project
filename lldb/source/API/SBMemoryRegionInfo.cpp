@@ -118,6 +118,12 @@ bool SBMemoryRegionInfo::IsMapped() {
   return m_opaque_up->GetMapped() == MemoryRegionInfo::eYes;
 }
 
+bool SBMemoryRegionInfo::IsStackMemory() {
+  LLDB_INSTRUMENT_VA(this);
+
+  return m_opaque_up->IsStackMemory() == MemoryRegionInfo::eYes;
+}
+
 const char *SBMemoryRegionInfo::GetName() {
   LLDB_INSTRUMENT_VA(this);
 

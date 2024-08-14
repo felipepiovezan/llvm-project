@@ -85,7 +85,6 @@ IsYoungerHeapCFAs(const StackID &lhs, const StackID &rhs, Process &process) {
   if (lhs_cfa_on_stack && rhs_cfa_on_stack)
     return HeapCFAComparisonResult::NoOpinion;
 
-  // FIXME: rdar://76119439
   // If one of the frames has a CFA on the stack and the other doesn't, we are
   // at the boundary between an asynchronous and a synchronous function.
   // Synchronous functions cannot call asynchronous functions, therefore the
@@ -94,6 +93,31 @@ IsYoungerHeapCFAs(const StackID &lhs, const StackID &rhs, Process &process) {
     return HeapCFAComparisonResult::Younger;
   if (!lhs_cfa_on_stack && rhs_cfa_on_stack)
     return HeapCFAComparisonResult::Older;
+
+  const lldb::addr_t lhs_cfa = lhs.GetCallFrameAddress();
+  const lldb::addr_t rhs_cfa = rhs.GetCallFrameAddress();
+  // If the cfas are the same, fallback to the usual scope comparison.
+  if (lhs_cfa == rhs_cfa)
+    return HeapCFAComparisonResult::NoOpinion;
+
+  const auto ptr_size = process.GetAddressByteSize();
+
+  // Both CFAs are on the heap and they are distinct.
+  // LHS is younger if and only if its continuation async context is (directly
+  // or indirectly) RHS. Chase continuation pointers to check this case, until
+  // we hit the end of the chain (parent_ctx == 0) or a safety limit in case of
+  // an invalid continuation chain.
+  auto max_num_frames = 1024;
+  for (lldb::addr_t parent_ctx = lhs_cfa; parent_ctx && max_num_frames;
+       max_num_frames--) {
+    Status error;
+    // The continuation's context is the first field of an async context.
+    if (!process.ReadMemory(parent_ctx, &parent_ctx, ptr_size, error))
+      break;
+    if (parent_ctx == rhs_cfa)
+      return HeapCFAComparisonResult::Younger;
+  }
+
   return HeapCFAComparisonResult::NoOpinion;
 }
 // END SWIFT

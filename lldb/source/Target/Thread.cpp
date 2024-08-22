@@ -795,12 +795,16 @@ bool Thread::ShouldStop(Event *event_ptr) {
   SetShouldRunBeforePublicStop(false);
 
   if (log) {
+    auto &sc =
+        GetStackFrameAtIndex(0)->GetSymbolContext(eSymbolContextEverything);
+    auto *funcname = sc.GetFunctionName(Mangled::ePreferMangled).AsCString();
     LLDB_LOGF(log,
               "Thread::%s(%p) for tid = 0x%4.4" PRIx64 " 0x%4.4" PRIx64
-              ", pc = 0x%16.16" PRIx64,
+              ", pc = 0x%16.16" PRIx64 " (%s)",
               __FUNCTION__, static_cast<void *>(this), GetID(), GetProtocolID(),
               GetRegisterContext() ? GetRegisterContext()->GetPC()
-                                   : LLDB_INVALID_ADDRESS);
+                                   : LLDB_INVALID_ADDRESS,
+              funcname);
     LLDB_LOGF(log, "^^^^^^^^ Thread::ShouldStop Begin ^^^^^^^^");
     StreamString s;
     s.IndentMore();
@@ -808,6 +812,14 @@ bool Thread::ShouldStop(Event *event_ptr) {
         s, GetID(), eDescriptionLevelVerbose, true /* internal */,
         false /* condense_trivial */, true /* skip_unreported */);
     LLDB_LOGF(log, "Plan stack initial state:\n%s", s.GetData());
+    s.Clear();
+    auto &external_bps = this->CalculateTarget()->GetBreakpointList(false);
+    for (const auto &bp : external_bps.Breakpoints())
+      bp->GetDescription(&s, lldb::DescriptionLevel::eDescriptionLevelFull);
+    auto &internal_bps = this->CalculateTarget()->GetBreakpointList(true);
+    for (const auto &bp : internal_bps.Breakpoints())
+      bp->GetDescription(&s, lldb::DescriptionLevel::eDescriptionLevelFull);
+    LLDB_LOGF(log, "Current breakpoints:\n%s", s.GetData());
   }
 
   // First query the stop info's ShouldStopSynchronous.  This handles
@@ -991,6 +1003,14 @@ bool Thread::ShouldStop(Event *event_ptr) {
     LLDB_LOGF(log, "Plan stack final state:\n%s", s.GetData());
     LLDB_LOGF(log, "vvvvvvvv Thread::ShouldStop End (returning %i) vvvvvvvv",
               should_stop);
+    s.Clear();
+    auto &external_bps = this->CalculateTarget()->GetBreakpointList(false);
+    for (const auto &bp : external_bps.Breakpoints())
+      bp->GetDescription(&s, lldb::DescriptionLevel::eDescriptionLevelFull);
+    auto &internal_bps = this->CalculateTarget()->GetBreakpointList(true);
+    for (const auto &bp : internal_bps.Breakpoints())
+      bp->GetDescription(&s, lldb::DescriptionLevel::eDescriptionLevelFull);
+    LLDB_LOGF(log, "Current breakpoints:\n%s", s.GetData());
   }
   return should_stop;
 }

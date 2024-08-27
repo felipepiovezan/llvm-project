@@ -2622,6 +2622,7 @@ UnwindPlanSP
 SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
                                            RegisterContext *regctx,
                                            bool &behaves_like_zeroth_frame) {
+  Log *log = GetLog(LLDBLog::Step);
   LLDB_SCOPED_TIMER();
 
   Target &target(process_sp->GetTarget());
@@ -2658,15 +2659,18 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
 
   Address func_start_addr;
   uint32_t prologue_size;
+  uint64_t func_size;
   ConstString mangled_name;
   if (sc.function) {
     func_start_addr = sc.function->GetAddressRange().GetBaseAddress();
     prologue_size = sc.function->GetPrologueByteSize();
     mangled_name = sc.function->GetMangled().GetMangledName();
+    func_size = sc.function->GetAddressRange().GetByteSize();
   } else if (sc.symbol) {
     func_start_addr = sc.symbol->GetAddress();
     prologue_size = sc.symbol->GetPrologueByteSize();
     mangled_name = sc.symbol->GetMangled().GetMangledName();
+    func_size = sc.symbol->GetByteSize();
   } else {
     return UnwindPlanSP();
   }
@@ -2675,7 +2679,11 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   bool in_prologue = (func_start_addr == pc ||
                       prologue_range.ContainsLoadAddress(pc, &target));
 
-  if (in_prologue) {
+  Address last_addr = func_start_addr;
+  last_addr.Slide(func_size - 4);
+  bool in_epilogue = last_addr == pc;
+
+  if (in_prologue || in_epilogue) {
     if (!IsAnySwiftAsyncFunctionSymbol(mangled_name.GetStringRef()))
       return UnwindPlanSP();
   } else {
@@ -2690,6 +2698,7 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
       return UnwindPlanSP();
   }
 
+  assert(!(in_epilogue && in_prologue));
   // The coroutine funclets split from an async function have 2 different ABIs:
   //  - Async suspend partial functions and the first funclet get their async
   //    context directly in the async register.
@@ -2709,7 +2718,19 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
       row->GetCFAValue().SetIsRegisterDereferenced(regnums->async_ctx_regnum);
     else
       row->GetCFAValue().SetIsRegisterPlusOffset(regnums->async_ctx_regnum, 0);
-  } else {
+  } 
+  else if (in_epilogue) {
+    if (indirect_context) {
+      LLDB_LOGF(log, "Setting epilogue CFA to be == x22 for pc: 0x%8.8" PRIx64,
+                pc.GetLoadAddress(&target));
+      row->GetCFAValue().SetIsRegisterPlusOffset(regnums->async_ctx_regnum, 0);
+    } else {
+      row->GetCFAValue().SetIsRegisterDereferenced(regnums->async_ctx_regnum);
+      LLDB_LOGF(log, "Setting epilogue CFA to be == deref(x22) for pc: 0x%8.8" PRIx64,
+                pc.GetLoadAddress(&target));
+    }
+  }
+  else {
     // In indirect funclets, dereferencing (fp-8) once produces the CFA of the
     // frame above. Dereferencing twice will produce the current frame's CFA.
     bool with_double_deref = indirect_context;
@@ -2719,7 +2740,7 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   }
 
   if (indirect_context) {
-    if (in_prologue) {
+    if (in_prologue || in_epilogue) {
       row->SetRegisterLocationToSame(regnums->async_ctx_regnum, false);
     } else {
       llvm::ArrayRef<uint8_t> expr = GetAsyncRegFromFramePointerDWARFExpr(

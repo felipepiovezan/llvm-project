@@ -78,6 +78,20 @@ class TestCase(lldbtest.TestBase):
         self.check_pcs(async_frames, process, target)
         self.check_variables(async_frames, ["222", "333", "444", "555"])
 
+        # Continue until the the last instruction of this Q funclet, inside its epilogue:
+        target.DeleteAllBreakpoints()
+        q_funclet = async_frames[0].GetFunction()
+        last_addr = q_funclet.GetInstructions(target)[-1].GetAddress()
+        target.BreakpointCreateBySBAddress(last_addr)
+        self.runCmd("log enable lldb step")
+        process.Continue()
+        async_frames = process.GetSelectedThread().frames
+        self.assertEqual(async_frames[0].GetFunction(), q_funclet)
+        self.check_cfas(async_frames, process)
+        self.check_pcs(async_frames, process, target)
+        self.check_variables(async_frames, ["222", "333", "444", "555"])
+
+
         target.DeleteAllBreakpoints()
         target.BreakpointCreateBySourceRegex("breakpoint3", source_file)
         process.Continue()

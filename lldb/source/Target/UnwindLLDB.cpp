@@ -23,9 +23,10 @@
 using namespace lldb;
 using namespace lldb_private;
 
-UnwindLLDB::UnwindLLDB(Thread &thread)
+UnwindLLDB::UnwindLLDB(Thread &thread, bool allow_language_plans)
     : Unwind(thread), m_frames(), m_unwind_complete(false),
-      m_user_supplied_trap_handler_functions() {
+      m_user_supplied_trap_handler_functions(),
+      m_allow_language_plans(allow_language_plans) {
   ProcessSP process_sp(thread.GetProcess());
   if (process_sp) {
     Args args;
@@ -78,7 +79,8 @@ bool UnwindLLDB::AddFirstFrame() {
   // First, set up the 0th (initial) frame
   CursorSP first_cursor_sp(new Cursor());
   RegisterContextLLDBSP reg_ctx_sp(new RegisterContextUnwind(
-      m_thread, RegisterContextLLDBSP(), first_cursor_sp->sctx, 0, *this));
+      m_thread, RegisterContextLLDBSP(), first_cursor_sp->sctx, 0, *this,
+      m_allow_language_plans));
   if (reg_ctx_sp.get() == nullptr)
     goto unwind_done;
 

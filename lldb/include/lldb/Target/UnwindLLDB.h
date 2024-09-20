@@ -25,7 +25,7 @@ class RegisterContextUnwind;
 
 class UnwindLLDB : public lldb_private::Unwind {
 public:
-  UnwindLLDB(lldb_private::Thread &thread);
+  UnwindLLDB(lldb_private::Thread &thread, bool allow_language_plans = true);
 
   ~UnwindLLDB() override = default;
 
@@ -136,6 +136,8 @@ private:
   // is how far we've currently gone.
 
   std::vector<ConstString> m_user_supplied_trap_handler_functions;
+
+  bool m_allow_language_plans;
 
   // Check if Full UnwindPlan of First frame is valid or not.
   // If not then try Fallback UnwindPlan of the frame. If Fallback

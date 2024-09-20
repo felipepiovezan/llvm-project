@@ -52,11 +52,9 @@ static ConstString GetSymbolOrFunctionName(const SymbolContext &sym_ctx) {
   return ConstString();
 }
 
-RegisterContextUnwind::RegisterContextUnwind(Thread &thread,
-                                             const SharedPtr &next_frame,
-                                             SymbolContext &sym_ctx,
-                                             uint32_t frame_number,
-                                             UnwindLLDB &unwind_lldb)
+RegisterContextUnwind::RegisterContextUnwind(
+    Thread &thread, const SharedPtr &next_frame, SymbolContext &sym_ctx,
+    uint32_t frame_number, UnwindLLDB &unwind_lldb, bool allow_language_plans)
     : RegisterContext(thread, frame_number), m_thread(thread),
       m_fast_unwind_plan_sp(), m_full_unwind_plan_sp(),
       m_fallback_unwind_plan_sp(), m_all_registers_available(false),
@@ -65,7 +63,8 @@ RegisterContextUnwind::RegisterContextUnwind(Thread &thread,
       m_current_offset(0), m_current_offset_backed_up_one(0),
       m_behaves_like_zeroth_frame(false), m_sym_ctx(sym_ctx),
       m_sym_ctx_valid(false), m_frame_number(frame_number), m_registers(),
-      m_parent_unwind(unwind_lldb) {
+      m_parent_unwind(unwind_lldb),
+      m_allow_language_plans(allow_language_plans) {
   m_sym_ctx.Clear(false);
   m_sym_ctx_valid = false;
 
@@ -140,8 +139,10 @@ void RegisterContextUnwind::InitializeZerothFrame() {
   if (ABISP abi_sp = process->GetABI())
     current_pc = abi_sp->FixCodeAddress(current_pc);
 
-  UnwindPlanSP lang_runtime_plan_sp = LanguageRuntime::GetRuntimeUnwindPlan(
-      m_thread, this, m_behaves_like_zeroth_frame);
+  UnwindPlanSP lang_runtime_plan_sp =
+      m_allow_language_plans ? LanguageRuntime::GetRuntimeUnwindPlan(
+                                   m_thread, this, m_behaves_like_zeroth_frame)
+                             : nullptr;
   if (lang_runtime_plan_sp.get()) {
     UnwindLogMsg("This is an async frame");
   }
@@ -339,8 +340,10 @@ void RegisterContextUnwind::InitializeNonZerothFrame() {
   // A LanguageRuntime may provide an UnwindPlan that is used in this
   // stack trace base on the RegisterContext contents, intsead
   // of the normal UnwindPlans we would use for the return-pc.
-  UnwindPlanSP lang_runtime_plan_sp = LanguageRuntime::GetRuntimeUnwindPlan(
-      m_thread, this, m_behaves_like_zeroth_frame);
+  UnwindPlanSP lang_runtime_plan_sp =
+      m_allow_language_plans ? LanguageRuntime::GetRuntimeUnwindPlan(
+                                   m_thread, this, m_behaves_like_zeroth_frame)
+                             : nullptr;
   if (lang_runtime_plan_sp.get()) {
     UnwindLogMsg("This is an async frame");
   }

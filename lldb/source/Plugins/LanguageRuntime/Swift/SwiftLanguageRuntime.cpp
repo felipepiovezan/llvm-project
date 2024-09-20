@@ -37,9 +37,11 @@
 #include "lldb/Interpreter/CommandObject.h"
 #include "lldb/Interpreter/CommandObjectMultiword.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
+#include "lldb/Symbol/FuncUnwinders.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/VariableList.h"
 #include "lldb/Target/RegisterContext.h"
+#include "lldb/Target/UnwindLLDB.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/OptionParsing.h"
@@ -2615,6 +2617,117 @@ GetAsyncRegFromFramePointerDWARFExpr(llvm::Triple::ArchType triple,
   return llvm::ArrayRef<uint8_t>(expr, size - 1);
 }
 
+std::optional<addr_t>
+ReadAsyncRegFromUnwind(SymbolContext &sc, Process &process, Address pc,
+                       Address func_start_addr, RegisterContext &regctx,
+                       AsyncUnwindRegisterNumbers regnums) {
+
+  lldb_private::UnwindLLDB unwind_lldb(regctx.GetThread(),
+                                       /*allow_language_plans*/ false);
+  StackFrameSP frame =
+      regctx.GetThread().GetStackFrameAtIndex(regctx.GetConcreteFrameIdx() + 1);
+  if (!frame)
+    return {};
+  auto regctx_parent = unwind_lldb.CreateRegisterContextForFrame(frame.get());
+  if (!regctx_parent)
+    return {};
+  addr_t async_reg = regctx_parent->ReadRegisterAsUnsigned(
+      regnums.async_ctx_regnum, LLDB_INVALID_ADDRESS);
+  if (async_reg == LLDB_INVALID_ADDRESS)
+    return {};
+  return async_reg;
+}
+
+// std::optional<RegisterValue> ReadRegisterValueFromRegisterLocation() {
+//   switch (regloc.type) {
+//   case UnwindLLDB::RegisterLocation::eRegisterInRegister: {
+//     const RegisterInfo *other_reg_info =
+//         GetRegisterInfoAtIndex(regloc.location.register_number);
+//
+//     if (!other_reg_info)
+//       return false;
+//
+//     if (IsFrameZero()) {
+//       success =
+//           m_thread.GetRegisterContext()->ReadRegister(other_reg_info, value);
+//     } else {
+//       success = GetNextFrame()->ReadRegister(other_reg_info, value);
+//     }
+//   } break;
+//   case UnwindLLDB::RegisterLocation::eRegisterValueInferred:
+//     success =
+//         value.SetUInt(regloc.location.inferred_value, reg_info->byte_size);
+//     break;
+//
+//   case UnwindLLDB::RegisterLocation::eRegisterNotSaved:
+//     break;
+//   case UnwindLLDB::RegisterLocation::eRegisterSavedAtHostMemoryLocation:
+//     llvm_unreachable("FIXME debugger inferior function call unwind");
+//   case UnwindLLDB::RegisterLocation::eRegisterSavedAtMemoryLocation: {
+//     Status error(ReadRegisterValueFromMemory(
+//         reg_info, regloc.location.target_memory_location,
+//         reg_info->byte_size, value));
+//     success = error.Success();
+//   } break;
+//   }
+
+// std::optional<addr_t>
+// ReadAsyncRegFromUnwind(SymbolContext &sc, Process &process, Address pc,
+//                        Address func_start_addr, RegisterContext &regctx,
+//                        AsyncUnwindRegisterNumbers regnums) {
+//   FuncUnwindersSP func_unwinders =
+//       pc.GetModule()->GetUnwindTable().GetFuncUnwindersContainingAddress(pc,
+//                                                                          sc);
+//   if (!func_unwinders)
+//     return {};
+//
+//   Target &target = process.GetTarget();
+//   UnwindPlanSP unwind_plan =
+//       func_unwinders->GetUnwindPlanAtNonCallSite(target, regctx.GetThread());
+//   if (!unwind_plan)
+//     return {};
+//
+//   UnwindPlan::RowSP row = unwind_plan->GetRowForFunctionOffset(
+//       pc.GetFileAddress() - func_start_addr.GetFileAddress());
+//   UnwindPlan::Row::RegisterLocation regloc;
+//   if (!row->GetRegisterInfo(regnums.async_ctx_regnum, regloc))
+//     return {};
+//
+//
+//   using RestoreType = UnwindPlan::Row::RegisterLocation::RestoreType;
+//   switch (regloc.GetLocationType()) {
+//   case RestoreType::inOtherRegister: {
+//     auto reg_num = regloc.GetRegisterNumber();
+//     auto *reg_info =
+//         regctx.GetRegisterInfo(lldb::RegisterKind::eRegisterKindDWARF,
+//         reg_num);
+//     RegisterValue reg_value;
+//     if (!regctx.ReadRegister(reg_info, reg_value))
+//       return {};
+//     if (addr_t addr = reg_value.GetAsUInt64(LLDB_INVALID_ADDRESS);
+//         addr != LLDB_INVALID_ADDRESS)
+//       return addr;
+//     return {};
+//   }
+//   case RestoreType::atCFAPlusOffset:
+//   case RestoreType::isCFAPlusOffset:
+//     return 10;
+//   case RestoreType::isConstant:
+//     return regloc.GetConstant();
+//   case RestoreType::same:
+//     return 10;
+//   case RestoreType::unspecified:
+//   case RestoreType::undefined:
+//     return 10;
+//   case RestoreType::atAFAPlusOffset:
+//   case RestoreType::isAFAPlusOffset:
+//   case RestoreType::isDWARFExpression:
+//   case RestoreType::atDWARFExpression:
+//     return {};
+//   }
+//   return {};
+// }
+
 // Examine the register state and detect the transition from a real
 // stack frame to an AsyncContext frame, or a frame in the middle of
 // the AsyncContext chain, and return an UnwindPlan for these situations.
@@ -2670,6 +2783,12 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   } else {
     return UnwindPlanSP();
   }
+
+  auto result = ReadAsyncRegFromUnwind(sc, *process_sp, pc, func_start_addr,
+                                       *regctx, *regnums);
+  Log *log(GetLog(LLDBLog::Unwind));
+  LLDB_LOGF(log, "x22 according to other unwinding = : 0x%8.8" PRIx64,
+            result.value_or(LLDB_INVALID_ADDRESS));
 
   AddressRange prologue_range(func_start_addr, prologue_size);
   bool in_prologue = (func_start_addr == pc ||

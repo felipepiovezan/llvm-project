@@ -30,7 +30,8 @@ public:
                         const SharedPtr &next_frame,
                         lldb_private::SymbolContext &sym_ctx,
                         uint32_t frame_number,
-                        lldb_private::UnwindLLDB &unwind_lldb);
+                        lldb_private::UnwindLLDB &unwind_lldb,
+                        bool allow_language_plans = true);
 
   ~RegisterContextUnwind() override = default;
 
@@ -254,6 +255,8 @@ private:
 
   lldb_private::UnwindLLDB &m_parent_unwind; // The UnwindLLDB that is creating
                                              // this RegisterContextUnwind
+
+  bool m_allow_language_plans;
 
   RegisterContextUnwind(const RegisterContextUnwind &) = delete;
   const RegisterContextUnwind &

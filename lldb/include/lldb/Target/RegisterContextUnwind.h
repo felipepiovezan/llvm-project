@@ -72,12 +72,6 @@ public:
   // above asynchronous trap handlers (sigtramp) for instance.
   bool BehavesLikeZerothFrame() const override;
 
-  static std::pair<UnwindLLDB::RegisterSearchResult,
-                   UnwindLLDB::RegisterLocation>
-  ConvertUnwindReglocToRealRegloc(
-      UnwindPlan::Row::RegisterLocation unwindplan_regloc,
-      RegisterNumber regnum, bool all_registers_available);
-
 private:
   enum FrameType {
     eNormalFrame,
@@ -204,8 +198,7 @@ private:
 
   lldb::UnwindPlanSP GetFullUnwindPlanForFrame();
 
-  static void UnwindLogMsg(const char *fmt, ...)
-      __attribute__((format(printf, 1, 2)));
+  void UnwindLogMsg(const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
   void UnwindLogMsgVerbose(const char *fmt, ...)
       __attribute__((format(printf, 2, 3)));

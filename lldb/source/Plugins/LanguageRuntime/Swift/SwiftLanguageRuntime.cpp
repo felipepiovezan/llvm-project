@@ -2617,116 +2617,86 @@ GetAsyncRegFromFramePointerDWARFExpr(llvm::Triple::ArchType triple,
   return llvm::ArrayRef<uint8_t>(expr, size - 1);
 }
 
+std::optional<addr_t> ReadRegisterAsAddress(RegisterContext &regctx,
+                                            unsigned regnum) {
+  auto reg = regctx.ReadRegisterAsUnsigned(regnum, LLDB_INVALID_ADDRESS);
+  if (reg != LLDB_INVALID_ADDRESS)
+    return reg;
+  return {};
+}
+
+std::optional<addr_t> ReadPtrFromAddr(Process &process, addr_t addr,
+                                      int offset) {
+  Status error;
+  addr_t ptr = process.ReadPointerFromMemory(addr + offset, error);
+  if (ptr != LLDB_INVALID_ADDRESS)
+    return ptr;
+  return {};
+}
+
+std::optional<addr_t> GetCFAAddr(Process &process, RegisterContext &regctx,
+                                 UnwindPlan::Row::FAValue cfa_loc) {
+  if (cfa_loc.IsRegisterPlusOffset()) {
+    unsigned regnum = cfa_loc.GetRegisterNumber();
+    if (std::optional<addr_t> regvalue = ReadRegisterAsAddress(regctx, regnum))
+      return *regvalue + cfa_loc.GetOffset();
+  }
+  return {};
+}
+
 std::optional<addr_t>
 ReadAsyncRegFromUnwind(SymbolContext &sc, Process &process, Address pc,
                        Address func_start_addr, RegisterContext &regctx,
                        AsyncUnwindRegisterNumbers regnums) {
+  FuncUnwindersSP func_unwinders =
+      pc.GetModule()->GetUnwindTable().GetFuncUnwindersContainingAddress(pc,
+                                                                         sc);
+  if (!func_unwinders)
+    return {};
 
-  lldb_private::UnwindLLDB unwind_lldb(regctx.GetThread(),
-                                       /*allow_language_plans*/ false);
-  StackFrameSP frame =
-      regctx.GetThread().GetStackFrameAtIndex(regctx.GetConcreteFrameIdx() + 1);
-  if (!frame)
+  Target &target = process.GetTarget();
+  UnwindPlanSP unwind_plan =
+      func_unwinders->GetUnwindPlanAtNonCallSite(target, regctx.GetThread());
+  if (!unwind_plan)
     return {};
-  auto regctx_parent = unwind_lldb.CreateRegisterContextForFrame(frame.get());
-  if (!regctx_parent)
+
+  UnwindPlan::RowSP row = unwind_plan->GetRowForFunctionOffset(
+      pc.GetFileAddress() - func_start_addr.GetFileAddress());
+  UnwindPlan::Row::RegisterLocation regloc;
+  if (!row->GetRegisterInfo(regnums.async_ctx_regnum, regloc))
     return {};
-  addr_t async_reg = regctx_parent->ReadRegisterAsUnsigned(
-      regnums.async_ctx_regnum, LLDB_INVALID_ADDRESS);
-  if (async_reg == LLDB_INVALID_ADDRESS)
+
+  using RestoreType = UnwindPlan::Row::RegisterLocation::RestoreType;
+  RestoreType loctype = regloc.GetLocationType();
+  switch (loctype) {
+  case RestoreType::same:
+  case RestoreType::inOtherRegister: {
+    unsigned regnum = loctype == RestoreType::same ? regnums.async_ctx_regnum
+                                                   : regloc.GetRegisterNumber();
+    return ReadRegisterAsAddress(regctx, regnum);
+  }
+  case RestoreType::atCFAPlusOffset:
+  case RestoreType::isCFAPlusOffset: {
+    std::optional<addr_t> cfa_addr =
+        GetCFAAddr(process, regctx, row->GetCFAValue());
+    if (!cfa_addr)
+      return {};
+    if (loctype == RestoreType::isCFAPlusOffset)
+      return *cfa_addr + regloc.GetOffset();
+    return ReadPtrFromAddr(process, *cfa_addr, regloc.GetOffset());
+  }
+  case RestoreType::isConstant:
+    return regloc.GetConstant();
+  case RestoreType::unspecified:
+  case RestoreType::undefined:
+  case RestoreType::atAFAPlusOffset:
+  case RestoreType::isAFAPlusOffset:
+  case RestoreType::isDWARFExpression:
+  case RestoreType::atDWARFExpression:
     return {};
-  return async_reg;
+  }
+  return {};
 }
-
-// std::optional<RegisterValue> ReadRegisterValueFromRegisterLocation() {
-//   switch (regloc.type) {
-//   case UnwindLLDB::RegisterLocation::eRegisterInRegister: {
-//     const RegisterInfo *other_reg_info =
-//         GetRegisterInfoAtIndex(regloc.location.register_number);
-//
-//     if (!other_reg_info)
-//       return false;
-//
-//     if (IsFrameZero()) {
-//       success =
-//           m_thread.GetRegisterContext()->ReadRegister(other_reg_info, value);
-//     } else {
-//       success = GetNextFrame()->ReadRegister(other_reg_info, value);
-//     }
-//   } break;
-//   case UnwindLLDB::RegisterLocation::eRegisterValueInferred:
-//     success =
-//         value.SetUInt(regloc.location.inferred_value, reg_info->byte_size);
-//     break;
-//
-//   case UnwindLLDB::RegisterLocation::eRegisterNotSaved:
-//     break;
-//   case UnwindLLDB::RegisterLocation::eRegisterSavedAtHostMemoryLocation:
-//     llvm_unreachable("FIXME debugger inferior function call unwind");
-//   case UnwindLLDB::RegisterLocation::eRegisterSavedAtMemoryLocation: {
-//     Status error(ReadRegisterValueFromMemory(
-//         reg_info, regloc.location.target_memory_location,
-//         reg_info->byte_size, value));
-//     success = error.Success();
-//   } break;
-//   }
-
-// std::optional<addr_t>
-// ReadAsyncRegFromUnwind(SymbolContext &sc, Process &process, Address pc,
-//                        Address func_start_addr, RegisterContext &regctx,
-//                        AsyncUnwindRegisterNumbers regnums) {
-//   FuncUnwindersSP func_unwinders =
-//       pc.GetModule()->GetUnwindTable().GetFuncUnwindersContainingAddress(pc,
-//                                                                          sc);
-//   if (!func_unwinders)
-//     return {};
-//
-//   Target &target = process.GetTarget();
-//   UnwindPlanSP unwind_plan =
-//       func_unwinders->GetUnwindPlanAtNonCallSite(target, regctx.GetThread());
-//   if (!unwind_plan)
-//     return {};
-//
-//   UnwindPlan::RowSP row = unwind_plan->GetRowForFunctionOffset(
-//       pc.GetFileAddress() - func_start_addr.GetFileAddress());
-//   UnwindPlan::Row::RegisterLocation regloc;
-//   if (!row->GetRegisterInfo(regnums.async_ctx_regnum, regloc))
-//     return {};
-//
-//
-//   using RestoreType = UnwindPlan::Row::RegisterLocation::RestoreType;
-//   switch (regloc.GetLocationType()) {
-//   case RestoreType::inOtherRegister: {
-//     auto reg_num = regloc.GetRegisterNumber();
-//     auto *reg_info =
-//         regctx.GetRegisterInfo(lldb::RegisterKind::eRegisterKindDWARF,
-//         reg_num);
-//     RegisterValue reg_value;
-//     if (!regctx.ReadRegister(reg_info, reg_value))
-//       return {};
-//     if (addr_t addr = reg_value.GetAsUInt64(LLDB_INVALID_ADDRESS);
-//         addr != LLDB_INVALID_ADDRESS)
-//       return addr;
-//     return {};
-//   }
-//   case RestoreType::atCFAPlusOffset:
-//   case RestoreType::isCFAPlusOffset:
-//     return 10;
-//   case RestoreType::isConstant:
-//     return regloc.GetConstant();
-//   case RestoreType::same:
-//     return 10;
-//   case RestoreType::unspecified:
-//   case RestoreType::undefined:
-//     return 10;
-//   case RestoreType::atAFAPlusOffset:
-//   case RestoreType::isAFAPlusOffset:
-//   case RestoreType::isDWARFExpression:
-//   case RestoreType::atDWARFExpression:
-//     return {};
-//   }
-//   return {};
-// }
 
 // Examine the register state and detect the transition from a real
 // stack frame to an AsyncContext frame, or a frame in the middle of
@@ -2755,12 +2725,6 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
     return UnwindPlanSP();
   }
 
-  // If we're in the prologue of a function, don't provide a Swift async
-  // unwind plan.  We can be tricked by unmodified caller-registers that
-  // make this look like an async frame when this is a standard ABI function
-  // call, and the parent is the async frame.
-  // This assumes that the frame pointer register will be modified in the
-  // prologue.
   Address pc;
   pc.SetLoadAddress(regctx->GetPC(), &target);
   SymbolContext sc;
@@ -2770,44 +2734,24 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
       return UnwindPlanSP();
 
   Address func_start_addr;
-  uint32_t prologue_size;
   ConstString mangled_name;
   if (sc.function) {
     func_start_addr = sc.function->GetAddressRange().GetBaseAddress();
-    prologue_size = sc.function->GetPrologueByteSize();
     mangled_name = sc.function->GetMangled().GetMangledName();
   } else if (sc.symbol) {
     func_start_addr = sc.symbol->GetAddress();
-    prologue_size = sc.symbol->GetPrologueByteSize();
     mangled_name = sc.symbol->GetMangled().GetMangledName();
   } else {
     return UnwindPlanSP();
   }
 
-  auto result = ReadAsyncRegFromUnwind(sc, *process_sp, pc, func_start_addr,
-                                       *regctx, *regnums);
-  Log *log(GetLog(LLDBLog::Unwind));
-  LLDB_LOGF(log, "x22 according to other unwinding = : 0x%8.8" PRIx64,
-            result.value_or(LLDB_INVALID_ADDRESS));
+  if (!IsAnySwiftAsyncFunctionSymbol(mangled_name.GetStringRef()))
+    return UnwindPlanSP();
 
-  AddressRange prologue_range(func_start_addr, prologue_size);
-  bool in_prologue = (func_start_addr == pc ||
-                      prologue_range.ContainsLoadAddress(pc, &target));
-
-  if (in_prologue) {
-    if (!IsAnySwiftAsyncFunctionSymbol(mangled_name.GetStringRef()))
-      return UnwindPlanSP();
-  } else {
-    addr_t saved_fp = LLDB_INVALID_ADDRESS;
-    Status error;
-    if (!process_sp->ReadMemory(fp, &saved_fp, 8, error))
-      return UnwindPlanSP();
-
-    // Get the high nibble of the dreferenced fp; if the 60th bit is set,
-    // this is the transition to a swift async AsyncContext chain.
-    if ((saved_fp & (0xfULL << 60)) >> 60 != 1)
-      return UnwindPlanSP();
-  }
+  std::optional<addr_t> async_reg_entry_value = ReadAsyncRegFromUnwind(
+      sc, *process_sp, pc, func_start_addr, *regctx, *regnums);
+  if (!async_reg_entry_value)
+    return UnwindPlanSP();
 
   // The coroutine funclets split from an async function have 2 different ABIs:
   //  - Async suspend partial functions and the first funclet get their async
@@ -2894,6 +2838,7 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   plan->SetSourcedFromCompiler(eLazyBoolNo);
   plan->SetUnwindPlanValidAtAllInstructions(eLazyBoolYes);
   plan->SetUnwindPlanForSignalTrap(eLazyBoolYes);
+
   return plan;
 }
 

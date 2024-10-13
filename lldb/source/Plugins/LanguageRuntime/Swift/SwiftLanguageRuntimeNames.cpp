@@ -420,6 +420,12 @@ private:
     auto &target = thread.GetProcess()->GetTarget();
     auto breakpoint_sp = target.CreateBreakpoint(resume_fn_ptr, true, false);
     breakpoint_sp->SetBreakpointKind("async-step");
+    auto log = GetLog(LLDBLog::Step);
+    LLDB_LOG(log, "---Created async breakpoint:\n");
+    auto stream = StreamString();
+    breakpoint_sp->GetDescription(&stream, lldb::DescriptionLevel::eDescriptionLevelFull);
+    LLDB_LOGF(log, "%s", stream.GetString().str().data());
+    LLDB_LOG(log, "---\n");
     return breakpoint_sp;
   }
 

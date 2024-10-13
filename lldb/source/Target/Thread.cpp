@@ -812,6 +812,14 @@ bool Thread::ShouldStop(Event *event_ptr) {
         s, GetID(), eDescriptionLevelVerbose, true /* internal */,
         false /* condense_trivial */, true /* skip_unreported */);
     LLDB_LOGF(log, "Plan stack initial state:\n%s", s.GetData());
+    s.Clear();
+    auto &external_bps = this->CalculateTarget()->GetBreakpointList(false);
+    for (const auto &bp : external_bps.Breakpoints())
+      bp->GetDescription(&s, lldb::DescriptionLevel::eDescriptionLevelFull);
+    auto &internal_bps = this->CalculateTarget()->GetBreakpointList(true);
+    for (const auto &bp : internal_bps.Breakpoints())
+      bp->GetDescription(&s, lldb::DescriptionLevel::eDescriptionLevelFull);
+    LLDB_LOGF(log, "Current breakpoints:\n%s", s.GetData());
   }
 
   // First query the stop info's ShouldStopSynchronous.  This handles
@@ -995,6 +1003,14 @@ bool Thread::ShouldStop(Event *event_ptr) {
     LLDB_LOGF(log, "Plan stack final state:\n%s", s.GetData());
     LLDB_LOGF(log, "vvvvvvvv Thread::ShouldStop End (returning %i) vvvvvvvv",
               should_stop);
+    s.Clear();
+    auto &external_bps = this->CalculateTarget()->GetBreakpointList(false);
+    for (const auto &bp : external_bps.Breakpoints())
+      bp->GetDescription(&s, lldb::DescriptionLevel::eDescriptionLevelFull);
+    auto &internal_bps = this->CalculateTarget()->GetBreakpointList(true);
+    for (const auto &bp : internal_bps.Breakpoints())
+      bp->GetDescription(&s, lldb::DescriptionLevel::eDescriptionLevelFull);
+    LLDB_LOGF(log, "Current breakpoints:\n%s", s.GetData());
   }
   return should_stop;
 }

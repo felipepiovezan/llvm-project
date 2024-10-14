@@ -893,6 +893,8 @@ DynamicLoaderDarwin::GetStepThroughTrampolinePlan(Thread &thread,
           current_symbol->GetMangled().GetName(Mangled::ePreferMangled);
 
       if (trampoline_name) {
+        if (trampoline_name == "swift_task_switch")
+          return nullptr;
         const ModuleList &images = target_sp->GetImages();
 
         SymbolContextList code_symbols;

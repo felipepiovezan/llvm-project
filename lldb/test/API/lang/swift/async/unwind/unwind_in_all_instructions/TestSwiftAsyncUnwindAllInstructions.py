@@ -63,9 +63,9 @@ class TestCase(lldbtest.TestBase):
         return breakpoints
 
     # FIXME: there are challenges when unwinding Q funclets ("await resume"),
-    # see rdar://137048317. For now, we only know how to unwind during and
-    # shortly after the prologue. This function returns "should skip" if we're
-    # at a PC that is too far from the prologue (~16 bytes). This is a
+    # see rdar://137048317. For now, we don't know how to unwind during the few
+    # instructions after the prologue. This function returns "should skip" if
+    # we're at a PC that is too far from the prologue (~16 bytes). This is a
     # rough approximation that seems to work for both x86 and arm.
     def should_skip_Q_funclet(self, thread):
         current_frame = thread.frames[0]

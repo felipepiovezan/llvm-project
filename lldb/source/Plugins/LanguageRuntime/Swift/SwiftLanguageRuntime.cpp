@@ -2703,26 +2703,32 @@ static llvm::Expected<addr_t> ReadAsyncContextRegisterFromUnwind(
       "SwiftLanguageRuntime: Unsupported register location type = %d", loctype);
 }
 
-static llvm::Expected<bool> IsIndirectContext(Process &process,
-                                              StringRef mangled_name,
-                                              addr_t async_reg,
+static llvm::Expected<bool> IsIndirectContext(StringRef mangled_name,
+                                              Process &process, Address pc,
                                               SymbolContext &sc) {
   if (!SwiftLanguageRuntime::IsSwiftAsyncAwaitResumePartialFunctionSymbol(
           mangled_name))
     return false;
 
-  llvm::Expected<addr_t> continuation_ptr = ReadPtrFromAddr(
-      process, async_reg, /*offset*/ process.GetAddressByteSize());
-  if (!continuation_ptr)
-    return continuation_ptr.takeError();
+  Target &target = process.GetTarget();
+  assert(sc.function || sc.symbol);
+  addr_t first_instr_load_addr =
+      sc.symbol
+          ? sc.symbol->GetLoadAddress(&target)
+          : sc.function->GetAddressRange().GetBaseAddress().GetLoadAddress(
+                &target);
+  uint32_t prologue_size = sc.symbol ? sc.symbol->GetPrologueByteSize()
+                                     : sc.function->GetPrologueByteSize();
+  addr_t pc_load_addr = pc.GetLoadAddress(&target);
 
-  if (sc.function)
-    return sc.function->GetAddressRange().ContainsLoadAddress(
-        *continuation_ptr, &process.GetTarget());
-  assert(sc.symbol);
-  Address continuation_addr;
-  continuation_addr.SetLoadAddress(*continuation_ptr, &process.GetTarget());
-  return sc.symbol->ContainsFileAddress(continuation_addr.GetFileAddress());
+  Log *log = GetLog(LLDBLog::Unwind);
+  LLDB_LOGF(log,
+            "IsIndirectContext  pc == 0x%8.8" PRIx64
+            " first_instr == 0x%8.8" PRIx64 " prologue_end = 0x%8.8" PRIx64,
+            pc.GetLoadAddress(&target), first_instr_load_addr,
+            first_instr_load_addr + prologue_size);
+  return pc_load_addr >= first_instr_load_addr &&
+         pc_load_addr <= (first_instr_load_addr + prologue_size);
 }
 
 // Examine the register state and detect the transition from a real
@@ -2792,7 +2798,7 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
     return log_expected(async_reg.takeError());
 
   llvm::Expected<bool> maybe_indirect_context =
-      IsIndirectContext(*process_sp, mangled_name, *async_reg, sc);
+      IsIndirectContext(mangled_name, *process_sp, pc, sc);
   if (!maybe_indirect_context)
     return log_expected(maybe_indirect_context.takeError());
 

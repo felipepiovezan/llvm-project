@@ -81,6 +81,8 @@ public:
   std::optional<bool>
   AreEqualForFrameComparison(const SymbolContext &sc1,
                              const SymbolContext &sc2) const override;
+
+  lldb::ThreadPlanSP GetStepOutThreadPlan(Thread &thread) const override;
   //------------------------------------------------------------------
   // Static Functions
   //------------------------------------------------------------------

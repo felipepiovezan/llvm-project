@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/RWMutex.h"
 
 #include "lldb/Target/Target.h"
@@ -140,21 +141,21 @@ public:
     std::lock_guard<std::recursive_mutex> guard(m_stack_map_mutex);
     lldb::tid_t tid = thread.GetID();
     // If we already have a ThreadPlanStack for this thread, use it.
-    if (m_plans_list.find(tid) != m_plans_list.end())
+    if (m_tid_to_plan_stack.contains(tid))
       return;
 
     m_plans_up_container.emplace_back(
         std::make_unique<ThreadPlanStack>(thread));
-    m_plans_list.emplace(tid, m_plans_up_container.back().get());
+    m_tid_to_plan_stack.try_emplace(tid, m_plans_up_container.back().get());
   }
 
   bool RemoveTID(lldb::tid_t tid) {
     std::lock_guard<std::recursive_mutex> guard(m_stack_map_mutex);
-    auto result = m_plans_list.find(tid);
-    if (result == m_plans_list.end())
+    auto result = m_tid_to_plan_stack.find(tid);
+    if (result == m_tid_to_plan_stack.end())
       return false;
     ThreadPlanStack *removed_stack = result->second;
-    m_plans_list.erase(result);
+    m_tid_to_plan_stack.erase(result);
     // Now find it in the stack storage:
     auto end = m_plans_up_container.end();
     auto iter = std::find_if(m_plans_up_container.begin(), end,
@@ -173,11 +174,7 @@ public:
 
   ThreadPlanStack *Find(lldb::tid_t tid) {
     std::lock_guard<std::recursive_mutex> guard(m_stack_map_mutex);
-    auto result = m_plans_list.find(tid);
-    if (result == m_plans_list.end())
-      return nullptr;
-    else
-      return result->second;
+    return m_tid_to_plan_stack.lookup(tid);
   }
 
   /// Clear the Thread* cache that each ThreadPlan contains.
@@ -186,8 +183,8 @@ public:
   /// generated.
   void ClearThreadCache() {
     std::lock_guard<std::recursive_mutex> guard(m_stack_map_mutex);
-    for (auto &plan_list : m_plans_list)
-      plan_list.second->ClearThreadCache();
+    for (auto [_, plan_stack] : m_tid_to_plan_stack)
+      plan_stack->ClearThreadCache();
   }
 
   // rename to Reactivate?
@@ -201,25 +198,20 @@ public:
     if (iter != end)
       m_detached_plans.erase(iter);
 
-    if (m_plans_list.find(stack.GetTID()) == m_plans_list.end())
-      m_plans_list.emplace(stack.GetTID(), &stack);
-    else
-      m_plans_list.at(stack.GetTID()) = &stack;
+    m_tid_to_plan_stack[stack.GetTID()] = &stack;
   }
 
   void ScanForDetachedPlanStacks() {
     std::lock_guard<std::recursive_mutex> guard(m_stack_map_mutex);
     llvm::SmallVector<lldb::tid_t, 2> invalidated_tids;
-    for (auto &pair : m_plans_list)
-      if (pair.second->GetTID() != pair.first)
-        invalidated_tids.push_back(pair.first);
+    for (auto [tid, plan_stack] : m_tid_to_plan_stack)
+      if (plan_stack->GetTID() != tid) {
+        invalidated_tids.push_back(tid);
+        m_detached_plans.push_back(plan_stack);
+      }
 
-    for (auto tid : invalidated_tids) {
-      auto it = m_plans_list.find(tid);
-      ThreadPlanStack *stack = it->second;
-      m_plans_list.erase(it);
-      m_detached_plans.push_back(stack);
-    }
+    for (auto tid : invalidated_tids)
+      m_tid_to_plan_stack.erase(tid);
   }
 
   // This gets the vector of pointers to thread plans that aren't
@@ -238,9 +230,9 @@ public:
 
   void Clear() {
     std::lock_guard<std::recursive_mutex> guard(m_stack_map_mutex);
-    for (auto &plan : m_plans_list)
-      plan.second->ThreadDestroyed(nullptr);
-    m_plans_list.clear();
+    for (auto [_, plan_stack] : m_tid_to_plan_stack)
+      plan_stack->ThreadDestroyed(nullptr);
+    m_tid_to_plan_stack.clear();
   }
 
   // Implements Process::DumpThreadPlans
@@ -259,22 +251,20 @@ private:
   // We don't want to make copies of these ThreadPlanStacks, there needs to be
   // just one of these tracking each piece of work.  But we need to move the
   // work from "attached to a TID" state to "detached" state, which is most
-  // conveniently done by having organizing containers for each of the two 
+  // conveniently done by having organizing containers for each of the two
   // states.
   // To make it easy to move these non-copyable entities in and out of the
-  // organizing containers, we make the ThreadPlanStacks into unique_ptr's in a 
+  // organizing containers, we make the ThreadPlanStacks into unique_ptr's in a
   // storage container - m_plans_up_container.  Storing unique_ptrs means we
   // can then use the pointer to the ThreadPlanStack in the "organizing"
-  // containers, the TID->Stack map m_plans_list, and the detached plans
+  // containers, the TID->Stack map m_tid_to_plan_stack, and the detached plans
   // vector m_detached_plans.
-  
+
   using PlansStore = std::vector<std::unique_ptr<ThreadPlanStack>>;
   PlansStore m_plans_up_container;
   std::vector<ThreadPlanStack *> m_detached_plans;
   mutable std::recursive_mutex m_stack_map_mutex;
-  using PlansList = std::unordered_map<lldb::tid_t, ThreadPlanStack *>;
-  PlansList m_plans_list;
-  
+  llvm::DenseMap<lldb::tid_t, ThreadPlanStack *> m_tid_to_plan_stack;
 };
 
 } // namespace lldb_private

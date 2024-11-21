@@ -440,8 +440,7 @@ void ThreadPlanStackMap::Update(ThreadList &current_threads,
   std::vector<lldb::tid_t> missing_threads;
   // If we are going to delete plans from the plan stack,
   // then scan for absent TID's:
-  for (auto &thread_plans : m_plans_list) {
-    lldb::tid_t cur_tid = thread_plans.first;
+  for (auto [cur_tid, _] : m_tid_to_plan_stack) {
     ThreadSP thread_sp = current_threads.FindThreadByID(cur_tid);
     if (!thread_sp)
       missing_threads.push_back(cur_tid);
@@ -456,8 +455,7 @@ void ThreadPlanStackMap::DumpPlans(Stream &strm,
                                    bool internal, bool condense_if_trivial,
                                    bool skip_unreported) {
   std::lock_guard<std::recursive_mutex> guard(m_stack_map_mutex);
-  for (auto &elem : m_plans_list) {
-    lldb::tid_t tid = elem.first;
+  for (auto [tid, plan_stack] : m_tid_to_plan_stack) {
     uint32_t index_id = 0;
     ThreadSP thread_sp = m_process.GetThreadList().FindThreadByID(tid);
 
@@ -469,8 +467,8 @@ void ThreadPlanStackMap::DumpPlans(Stream &strm,
       index_id = thread_sp->GetIndexID();
 
     if (condense_if_trivial) {
-      if (!elem.second->AnyPlans() && !elem.second->AnyCompletedPlans() &&
-          !elem.second->AnyDiscardedPlans()) {
+      if (!plan_stack->AnyPlans() && !plan_stack->AnyCompletedPlans() &&
+          !plan_stack->AnyDiscardedPlans()) {
         strm.Printf("thread #%u: tid = 0x%4.4" PRIx64 "\n", index_id, tid);
         strm.IndentMore();
         strm.Indent();
@@ -483,7 +481,7 @@ void ThreadPlanStackMap::DumpPlans(Stream &strm,
     strm.Indent();
     strm.Printf("thread #%u: tid = 0x%4.4" PRIx64 ":\n", index_id, tid);
 
-    elem.second->DumpThreadPlans(strm, desc_level, internal);
+    plan_stack->DumpThreadPlans(strm, desc_level, internal);
   }
 }
 

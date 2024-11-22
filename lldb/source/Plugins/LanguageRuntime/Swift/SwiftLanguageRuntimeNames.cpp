@@ -305,6 +305,8 @@ public:
     m_funclet_bp->SetBreakpointKind("async-run-to-funclet");
   }
 
+  void DidPush() override { ClearTID(); }
+
   bool ValidatePlan(Stream *error) override {
     if (m_funclet_bp->HasResolvedLocations())
       return true;

@@ -1277,6 +1277,11 @@ public:
   ///     an empty std::optional is returned in that case.
   std::optional<lldb::addr_t> GetPreviousFrameZeroPC();
 
+  // Some threads are threads that are made up by OperatingSystem plugins that
+  // are threads that exist and are context switched out into memory. The
+  // OperatingSystem plug-in need a ways to know if a thread is "real" or made
+  // up.
+  virtual bool IsOperatingSystemPluginThread() const { return false; }
 protected:
   friend class ThreadPlan;
   friend class ThreadList;
@@ -1306,11 +1311,6 @@ protected:
   // stopped it.
   virtual bool IsStillAtLastBreakpointHit();
 
-  // Some threads are threads that are made up by OperatingSystem plugins that
-  // are threads that exist and are context switched out into memory. The
-  // OperatingSystem plug-in need a ways to know if a thread is "real" or made
-  // up.
-  virtual bool IsOperatingSystemPluginThread() const { return false; }
 
   // Subclasses that have a way to get an extended info dictionary for this
   // thread should fill

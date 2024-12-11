@@ -15,6 +15,9 @@
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/Threading.h"
 
+#include "Plugins/LanguageRuntime/Swift/ReflectionContextInterface.h"
+#include "Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.h"
+#include "Plugins/Process/Utility/ThreadMemory.h"
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Breakpoint/StoppointCallbackContext.h"
 #include "lldb/Core/Debugger.h"
@@ -1286,6 +1289,73 @@ bool Process::UpdateThreadList(ThreadList &old_thread_list,
   return DoUpdateThreadList(old_thread_list, new_thread_list);
 }
 
+std::optional<uint64_t> FindTaskId(Process &process,
+                                   ThreadSafeReflectionContext &reflection_ctx,
+                                   Thread &thread) {
+  StructuredData::ObjectSP info_root_sp = thread.GetExtendedInfo();
+  if (!info_root_sp)
+    return {};
+
+  StructuredData::ObjectSP node =
+      info_root_sp->GetObjectForDotSeparatedPath("tsd_address");
+  if (!node)
+    return {};
+  StructuredData::UnsignedInteger *raw_tsd_addr = node->GetAsUnsignedInteger();
+  if (!raw_tsd_addr)
+    return {};
+  addr_t tsd_addr = raw_tsd_addr->GetUnsignedIntegerValue();
+  addr_t task_addr_location = tsd_addr + (103 << 3);
+  Status error;
+  addr_t task_addr = process.ReadPointerFromMemory(task_addr_location, error);
+  if (error.Fail())
+    return {};
+
+  llvm::Expected<ReflectionContextInterface::AsyncTaskInfo> task_info =
+      reflection_ctx->asyncTaskInfo(task_addr, 1, 1);
+  if (!task_info) {
+    llvm::consumeError(task_info.takeError());
+    return {};
+  }
+  return task_info->task_id;
+}
+
+bool UpdateToSwiftThreads(Process &process, ThreadList &old_thread_list,
+                          ThreadList &real_thread_list,
+                          ThreadList &new_thread_list) {
+  if (!LanguageRuntime::FindPlugin(&process,
+                                   lldb::LanguageType::eLanguageTypeObjC))
+    return false;
+  auto *runtime = SwiftLanguageRuntime::Get(&process);
+  if (!runtime || !runtime->m_impl)
+    return false;
+
+  ThreadSafeReflectionContext reflection_ctx = runtime->GetReflectionContext();
+
+  uint32_t non_mapped_insert_idx = 0;
+  for (const ThreadSP &real_thread : real_thread_list.Threads()) {
+    std::optional<uint64_t> maybe_task_id =
+        FindTaskId(process, reflection_ctx, *real_thread);
+    if (!maybe_task_id.has_value()) {
+      new_thread_list.InsertThread(real_thread, non_mapped_insert_idx);
+      non_mapped_insert_idx++;
+      continue;
+    }
+
+    uint64_t task_id = 0xdeadbeef00000000 | *maybe_task_id;
+    ThreadSP old_thread = old_thread_list.FindThreadByID(task_id);
+    if (old_thread && !old_thread->IsOperatingSystemPluginThread())
+      old_thread = nullptr;
+
+    ThreadSP swift_thread =
+        old_thread ? old_thread
+                   : std::make_shared<ThreadMemory>(
+                         process, task_id, "mythreadname", "some  queue", 0);
+    swift_thread->SetBackingThread(real_thread);
+    new_thread_list.AddThread(swift_thread);
+  }
+  return true;
+}
+
 void Process::UpdateThreadListIfNeeded() {
   const uint32_t stop_id = GetStopID();
   if (m_thread_list.GetSize(false) == 0 ||
@@ -1344,9 +1414,12 @@ void Process::UpdateThreadListIfNeeded() {
 
           if (saved_prefer_dynamic != lldb::eNoDynamicValues)
             target.SetPreferDynamicValue(saved_prefer_dynamic);
+        } else if (UpdateToSwiftThreads(*this, old_thread_list,
+                                        real_thread_list, new_thread_list)) {
         } else {
-          // No OS plug-in, the new thread list is the same as the real thread
-          // list.
+          // // No OS plug-in, the new thread list is the same as the real
+          // thread
+          // // list.
           new_thread_list = real_thread_list;
         }
 

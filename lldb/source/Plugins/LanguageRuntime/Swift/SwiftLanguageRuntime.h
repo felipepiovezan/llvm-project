@@ -70,10 +70,10 @@ protected:
   ///   elegant to have CreateInstance return the right object,
   ///   unfortunately Process wants to cache the returned language
   ///   runtimes and doesn't call CreateInstance() ever again.
-  std::unique_ptr<SwiftLanguageRuntimeStub> m_stub;
-  std::unique_ptr<SwiftLanguageRuntimeImpl> m_impl;
 
 public:
+  std::unique_ptr<SwiftLanguageRuntimeStub> m_stub;
+  std::unique_ptr<SwiftLanguageRuntimeImpl> m_impl;
   ThreadSafeReflectionContext GetReflectionContext();
   static char ID;
 

@@ -532,9 +532,6 @@ struct AsyncUnwindRegisterNumbers {
 
 std::optional<AsyncUnwindRegisterNumbers>
 GetAsyncUnwindRegisterNumbers(llvm::Triple::ArchType triple);
-
-lldb::ThreadPlanSP GetThreadPlanRunToAddressOnAsyncCtx(
-    Thread &thread, lldb::addr_t destination_addr, lldb::addr_t async_ctx);
 } // namespace lldb_private
 
 #endif // liblldb_SwiftLanguageRuntime_h_

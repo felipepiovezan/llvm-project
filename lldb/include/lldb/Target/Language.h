@@ -376,10 +376,6 @@ public:
 
   virtual std::optional<bool> GetBooleanFromString(llvm::StringRef str) const;
 
-  virtual lldb::ThreadPlanSP GetStepOutThreadPlan(Thread &thread) const {
-    return nullptr;
-  }
-
   /// Returns true if this Language supports exception breakpoints on throw via
   /// a corresponding LanguageRuntime plugin.
   virtual bool SupportsExceptionBreakpointsOnThrow() const { return false; }

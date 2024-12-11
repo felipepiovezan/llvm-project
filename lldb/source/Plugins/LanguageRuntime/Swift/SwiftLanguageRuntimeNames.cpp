@@ -422,12 +422,6 @@ CreateRunThroughTaskSwitchingTrampolines(Thread &thread,
   return nullptr;
 }
 
-lldb::ThreadPlanSP GetThreadPlanRunToAddressOnAsyncCtx(
-    Thread &thread, lldb::addr_t destination_addr, lldb::addr_t async_ctx) {
-  return std::make_shared<ThreadPlanRunToAddressOnAsyncCtx>(
-      thread, destination_addr, async_ctx);
-}
-
 static lldb::ThreadPlanSP GetStepThroughTrampolinePlan(Thread &thread,
                                                        bool stop_others) {
   // Here are the trampolines we have at present.

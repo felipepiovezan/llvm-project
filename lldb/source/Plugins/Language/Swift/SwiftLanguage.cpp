@@ -15,7 +15,6 @@
 #include "SwiftUnsafeTypes.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Target/RegisterContext.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/ValueObject/ValueObject.h"
 #include "lldb/ValueObject/ValueObjectVariable.h"
@@ -1836,23 +1835,6 @@ SwiftLanguage::AreEqualForFrameComparison(const SymbolContext &sc1,
     return false;
   }
   llvm_unreachable("unhandled enumeration in AreEquivalentFunctions");
-}
-
-ThreadPlanSP SwiftLanguage::GetStepOutThreadPlan(Thread &thread) const {
-  StackFrameSP frame_zero = thread.GetStackFrameAtIndex(0);
-  // If this frame is not an async frame, don't do anything. 
-  if (frame_zero->GetStackID().IsCFAOnStack(*thread.GetProcess()))
-    return nullptr;
-
-  StackFrameSP frame_one = thread.GetStackFrameAtIndex(1);
-  // Sanity checks: these should not happen.
-  if (!frame_one || frame_one->GetStackID().IsCFAOnStack(*thread.GetProcess()))
-    return nullptr;
-
-  addr_t async_ctx = frame_one->GetStackID().GetCallFrameAddress();
-  addr_t continuation_pc = frame_one->GetStackID().GetPC();
-  return GetThreadPlanRunToAddressOnAsyncCtx(thread, continuation_pc,
-                                             async_ctx);
 }
 
 //------------------------------------------------------------------

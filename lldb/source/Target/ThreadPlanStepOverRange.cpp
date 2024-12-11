@@ -181,17 +181,6 @@ bool ThreadPlanStepOverRange::ShouldStop(Event *event_ptr) {
         // rely on that breakpoint to trigger once we return to the range.
         if (m_next_branch_bp_sp)
           return false;
-
-        const SymbolContext &sc = thread.GetStackFrameAtIndex(0)->GetSymbolContext(
-            eSymbolContextEverything);
-        if (Language *language = Language::FindPlugin(sc.GetLanguage())) {
-          new_plan_sp = language->GetStepOutThreadPlan(thread);
-          if (new_plan_sp) {
-            thread.QueueThreadPlan(new_plan_sp, stop_others);
-            break;
-          }
-        }
-
         new_plan_sp = thread.QueueThreadPlanForStepOutNoShouldStop(
             false, nullptr, true, stop_others, eVoteNo, eVoteNoOpinion, 0,
             m_status, true);

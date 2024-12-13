@@ -81,6 +81,8 @@ public:
     return ClassID == &ID || LanguageRuntime::isA(ClassID);
   }
 
+  bool IsStub() const { return m_stub != nullptr; }
+
   /// Static Functions.
   /// \{
   static void Initialize();

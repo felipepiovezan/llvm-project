@@ -163,6 +163,7 @@ public:
     bool hasIsRunning = false;
     bool isRunning = false;
     bool isEnqueued = false;
+    uint64_t task_id;
   };
   // The default limits are copied from swift-inspect.
   virtual llvm::Expected<AsyncTaskInfo>

@@ -14,11 +14,11 @@ class TestSwiftReflectionOnly(lldbtest.TestBase):
         """Test debugging a program without swiftmodules is functional"""
         self.build()
 
+        log = self.getBuildArtifact('types.log')
+        self.expect('log enable lldb types -v -f ' + log)
         target, process, thread, bkpt = lldbutil.run_to_source_breakpoint(
             self, 'Set breakpoint here', lldb.SBFileSpec('main.swift'),
             extra_images=['dynamic_lib'])
-        log = self.getBuildArtifact('types.log')
-        self.expect('log enable lldb types -v -f ' + log)
 
         check_var = lldbutil.check_variable
         frame = thread.frames[0]

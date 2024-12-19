@@ -276,13 +276,15 @@ static bool HasReflectionInfo(ObjectFile *obj_file) {
 }
 
 ThreadSafeReflectionContext SwiftLanguageRuntime::GetReflectionContext() {
+  m_process->GetThreadList().GetMutex().lock();
   m_reflection_ctx_mutex.lock();
 
   SetupReflection();
   // SetupReflection can potentially fail.
   if (m_initialized_reflection_ctx)
     ProcessModulesToAdd();
-  return {m_reflection_ctx.get(), m_reflection_ctx_mutex};
+  return {m_reflection_ctx.get(), m_reflection_ctx_mutex,
+          m_process->GetThreadList().GetMutex()};
 }
 
 void SwiftLanguageRuntime::ProcessModulesToAdd() {

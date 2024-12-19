@@ -171,6 +171,6 @@ public:
                 unsigned AsyncBacktraceLimit = 1000) = 0;
 };
 
-using ThreadSafeReflectionContext = LockGuarded<ReflectionContextInterface>;
+using ThreadSafeReflectionContext = LockGuarded<ReflectionContextInterface, 2>;
 } // namespace lldb_private
 #endif

@@ -89,13 +89,20 @@ private:
 /// An implementation of the generic ReflectionContextInterface that
 /// is templatized on target pointer width and specialized to either
 /// 32-bit or 64-bit pointers, with and without ObjC interoperability.
-template <typename ReflectionContext, bool ObjCEnabled, unsigned PointerSize>
+template <typename Runtime, bool ObjCEnabled, unsigned PointerSize>
 class TargetReflectionContext : public ReflectionContextInterface {
   DescriptorFinderForwarder m_forwader;
-  ReflectionContext m_reflection_ctx;
+  swift::reflection::ReflectionContext<Runtime> m_reflection_ctx;
   swift::reflection::TypeConverter m_type_converter;
 
 public:
+  size_t GetTaskIdOffset() const override {
+    using Job = swift::reflection::Job<Runtime>;
+    // Static offset of the Task ID in the Task data structure.
+    constexpr static size_t IdOffset = offsetof(Job, Id);
+    return IdOffset;
+  }
+
   TargetReflectionContext(
       std::shared_ptr<swift::reflection::MemoryReader> reader,
       SwiftMetadataCache *swift_metadata_cache)
@@ -433,22 +440,27 @@ std::unique_ptr<ReflectionContextInterface>
 ReflectionContextInterface::CreateReflectionContext(
     uint8_t ptr_size, std::shared_ptr<swift::remote::MemoryReader> reader,
     bool ObjCInterop, SwiftMetadataCache *swift_metadata_cache) {
-  using ReflectionContext32ObjCInterop = TargetReflectionContext<
-      swift::reflection::ReflectionContext<
-          swift::External<swift::WithObjCInterop<swift::RuntimeTarget<4>>>>,
-      true, 4>;
-  using ReflectionContext32NoObjCInterop = TargetReflectionContext<
-      swift::reflection::ReflectionContext<
-          swift::External<swift::NoObjCInterop<swift::RuntimeTarget<4>>>>,
-      false, 4>;
-  using ReflectionContext64ObjCInterop = TargetReflectionContext<
-      swift::reflection::ReflectionContext<
-          swift::External<swift::WithObjCInterop<swift::RuntimeTarget<8>>>>,
-      true, 8>;
-  using ReflectionContext64NoObjCInterop = TargetReflectionContext<
-      swift::reflection::ReflectionContext<
-          swift::External<swift::NoObjCInterop<swift::RuntimeTarget<8>>>>,
-      false, 8>;
+
+  using Runtime32ObjCInterop =
+      swift::External<swift::WithObjCInterop<swift::RuntimeTarget<4>>>;
+  using ReflectionContext32ObjCInterop =
+      TargetReflectionContext<Runtime32ObjCInterop, true, 4>;
+
+  using Runtime32ObjCNoInterop =
+      swift::External<swift::NoObjCInterop<swift::RuntimeTarget<4>>>;
+  using ReflectionContext32NoObjCInterop =
+      TargetReflectionContext<Runtime32ObjCNoInterop, false, 4>;
+
+  using Runtime64ObjCInterop =
+      swift::External<swift::WithObjCInterop<swift::RuntimeTarget<8>>>;
+  using ReflectionContext64ObjCInterop =
+      TargetReflectionContext<Runtime64ObjCInterop, true, 8>;
+
+  using Runtime64ObjCNoInterop =
+      swift::External<swift::NoObjCInterop<swift::RuntimeTarget<8>>>;
+  using ReflectionContext64NoObjCInterop =
+      TargetReflectionContext<Runtime64ObjCNoInterop, false, 8>;
+
   if (ptr_size == 4) {
     if (ObjCInterop)
       return std::make_unique<ReflectionContext32ObjCInterop>(

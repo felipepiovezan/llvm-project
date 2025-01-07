@@ -70,6 +70,7 @@ public:
 
   virtual ~ReflectionContextInterface() = default;
 
+  virtual size_t GetTaskIdOffset() const = 0;
   virtual std::optional<uint32_t> AddImage(
       llvm::function_ref<std::pair<swift::remote::RemoteRef<void>, uint64_t>(
           swift::ReflectionSectionKind)>

@@ -1293,6 +1293,9 @@ void Process::UpdateThreadListIfNeeded() {
     bool clear_unused_threads = true;
     const StateType state = GetPrivateState();
     if (StateIsStoppedState(state, true)) {
+      OperatingSystem *os = GetOperatingSystem();
+      if (os)
+        os->WillUpdateThreadList();
       std::lock_guard<std::recursive_mutex> guard(m_thread_list.GetMutex());
       m_thread_list.SetStopID(stop_id);
 
@@ -1309,7 +1312,6 @@ void Process::UpdateThreadListIfNeeded() {
         // are shutting down, since that may call back into the SBAPI's,
         // requiring the API lock which is already held by whoever is shutting
         // us down, causing a deadlock.
-        OperatingSystem *os = GetOperatingSystem();
         if (os && !m_destroy_in_process && !m_destroy_complete) {
           // Clear any old backing threads where memory threads might have been
           // backed by actual threads from the lldb_private::Process subclass

@@ -43,6 +43,8 @@ public:
   OperatingSystem(Process *process);
 
   // Plug-in Methods
+  virtual void WillUpdateThreadList() {}
+
   virtual bool UpdateThreadList(ThreadList &old_thread_list,
                                 ThreadList &real_thread_list,
                                 ThreadList &new_thread_list) = 0;

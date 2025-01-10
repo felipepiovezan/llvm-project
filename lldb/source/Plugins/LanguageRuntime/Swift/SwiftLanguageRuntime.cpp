@@ -2426,7 +2426,9 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   UnwindPlanSP plan = std::make_shared<UnwindPlan>(lldb::eRegisterKindDWARF);
   plan->AppendRow(row);
   plan->SetSourceName("Swift Transition-to-AsyncContext-Chain");
-  plan->SetSourcedFromCompiler(eLazyBoolNo);
+  // Make this plan more authoritative, so that the unwinding fallback
+  // mechanisms don't kick in and produce a physical backtrace instead.
+  plan->SetSourcedFromCompiler(eLazyBoolYes);
   plan->SetUnwindPlanValidAtAllInstructions(eLazyBoolYes);
   plan->SetUnwindPlanForSignalTrap(eLazyBoolYes);
   return plan;
@@ -2466,7 +2468,9 @@ UnwindPlanSP SwiftLanguageRuntime::GetFollowAsyncContextUnwindPlan(
   UnwindPlanSP plan = std::make_shared<UnwindPlan>(lldb::eRegisterKindDWARF);
   plan->AppendRow(row);
   plan->SetSourceName("Swift Following-AsyncContext-Chain");
-  plan->SetSourcedFromCompiler(eLazyBoolNo);
+  // Make this plan more authoritative, so that the unwinding fallback
+  // mechanisms don't kick in and produce a physical backtrace instead.
+  plan->SetSourcedFromCompiler(eLazyBoolYes);
   plan->SetUnwindPlanValidAtAllInstructions(eLazyBoolYes);
   plan->SetUnwindPlanForSignalTrap(eLazyBoolYes);
   behaves_like_zeroth_frame = true;

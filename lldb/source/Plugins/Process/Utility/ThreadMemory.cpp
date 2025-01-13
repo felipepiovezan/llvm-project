@@ -67,7 +67,6 @@ ThreadMemory::CreateRegisterContextForFrame(StackFrame *frame) {
 
 bool ThreadMemory::CalculateStopInfo() {
   if (m_backing_thread_sp) {
-    SetStopInfo(StopInfoSP());
     lldb::StopInfoSP backing_stop_info_sp(
         m_backing_thread_sp->GetPrivateStopInfo());
     if (backing_stop_info_sp &&
@@ -76,8 +75,6 @@ bool ThreadMemory::CalculateStopInfo() {
       SetStopInfo(backing_stop_info_sp);
       return true;
     }
-    if (!backing_stop_info_sp && this->m_stop_info_sp)
-      return true;
   } else {
     ProcessSP process_sp(GetProcess());
 

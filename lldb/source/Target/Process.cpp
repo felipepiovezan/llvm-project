@@ -387,6 +387,7 @@ bool ProcessProperties::GetOSPluginReportsAllThreads() const {
   if (!exp_values)
     return fail_value;
 
+  return false;
   return exp_values
       ->GetPropertyAtIndexAs<bool>(ePropertyOSPluginReportsAllThreads)
       .value_or(fail_value);
@@ -1319,7 +1320,11 @@ void Process::UpdateThreadListIfNeeded() {
           // See if the OS plugin reports all threads.  If it does, then
           // it is safe to clear unseen thread's plans here.  Otherwise we
           // should preserve them in case they show up again:
-          clear_unused_threads = GetOSPluginReportsAllThreads();
+          std::optional<bool> os_reports_all_threads =
+              os->DoesPluginReportAllThreads();
+          clear_unused_threads = os_reports_all_threads
+                                     ? *os_reports_all_threads
+                                     : GetOSPluginReportsAllThreads();
 
           // Turn off dynamic types to ensure we don't run any expressions.
           // Objective-C can run an expression to determine if a SBValue is a

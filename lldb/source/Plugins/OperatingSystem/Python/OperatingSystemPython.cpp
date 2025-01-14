@@ -163,8 +163,7 @@ DynamicRegisterInfo *OperatingSystemPython::GetDynamicRegisterInfo() {
 
 bool OperatingSystemPython::UpdateThreadList(ThreadList &old_thread_list,
                                              ThreadList &core_thread_list,
-                                             ThreadList &new_thread_list,
-                                             ThreadPlanStackMap &) {
+                                             ThreadList &new_thread_list) {
   if (!m_interpreter || !m_operating_system_interface_sp)
     return false;
 

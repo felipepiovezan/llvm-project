@@ -95,31 +95,9 @@ OperatingSystemSwift::OperatingSystemSwift(lldb_private::Process &process)
 
 OperatingSystemSwift::~OperatingSystemSwift() = default;
 
-void OperatingSystemSwift::PrunePlansForNonBackedThreads(
-    ThreadPlanStackMap &plan_stack_map, ThreadList &threads) {
-  for (auto tid : plan_stack_map.GetKnownTIDs()) {
-    // If there is a thread running with this TID, keep its ThreadPlanStack
-    // alive.
-    ThreadSP thread = threads.FindThreadByID(tid, false /*can_update=*/);
-    if (thread)
-      continue;
-
-    // The thread is not currently active. If it is a Task Thread created by
-    // this plugin, keep its alive.
-    if (m_task_tids.contains(tid))
-      continue;
-    // Otherwise, it is a core thread no longer active. Prune it.
-    plan_stack_map.RemoveTID(tid);
-    LLDB_LOGF(GetLog(LLDBLog::OS),
-              "OperatingSystemSwift: deleting "
-              "plan for core thread with tid = %" PRIx64,
-              tid);
-  }
-}
-
-bool OperatingSystemSwift::UpdateThreadList(
-    ThreadList &old_thread_list, ThreadList &core_thread_list,
-    ThreadList &new_thread_list, ThreadPlanStackMap &plan_stack_map) {
+bool OperatingSystemSwift::UpdateThreadList(ThreadList &old_thread_list,
+                                            ThreadList &core_thread_list,
+                                            ThreadList &new_thread_list) {
   Log *log = GetLog(LLDBLog::OS);
 
   LLDB_LOGF(
@@ -157,13 +135,11 @@ bool OperatingSystemSwift::UpdateThreadList(
 
     swift_thread->SetBackingThread(real_thread);
     new_thread_list.AddThread(swift_thread);
-    m_task_tids.insert(masked_task_id);
     LLDB_LOGF(log,
               "OperatingSystemSwift: mapping thread IDs: %" PRIx64
               " -> %" PRIx64,
               real_thread->GetID(), swift_thread->GetID());
   }
-  PrunePlansForNonBackedThreads(plan_stack_map, new_thread_list);
   return true;
 }
 

@@ -68,6 +68,7 @@
 
 using namespace lldb;
 using namespace lldb_private;
+using RuntimeKind = SwiftLanguageRuntime::RuntimeKind;
 
 LLDB_PLUGIN_DEFINE(SwiftLanguageRuntime)
 
@@ -116,8 +117,6 @@ AppleObjCRuntimeV2 *SwiftLanguageRuntime::GetObjCRuntime() {
   return GetObjCRuntime(*m_process);
 }
 
-enum class RuntimeKind { Swift, ObjC };
-
 /// Detect a statically linked Swift runtime by looking for a well-known symbol.
 static bool IsStaticSwiftRuntime(Module &image) {
   static ConstString swift_reflection_version_sym("swift_release");
@@ -125,7 +124,8 @@ static bool IsStaticSwiftRuntime(Module &image) {
 }
 
 /// \return the Swift or Objective-C runtime found in the loaded images.
-static ModuleSP findRuntime(Process &process, RuntimeKind runtime_kind) {
+ModuleSP SwiftLanguageRuntime::findRuntime(Process &process,
+                                           RuntimeKind runtime_kind) {
   AppleObjCRuntimeV2 *objc_runtime = nullptr;
   if (runtime_kind == RuntimeKind::ObjC) {
     objc_runtime = SwiftLanguageRuntime::GetObjCRuntime(process);
@@ -164,7 +164,7 @@ static ModuleSP findRuntime(Process &process, RuntimeKind runtime_kind) {
 static std::optional<lldb::addr_t>
 FindSymbolForSwiftObject(Process &process, RuntimeKind runtime_kind,
                          StringRef object, const SymbolType sym_type) {
-  ModuleSP image = findRuntime(process, runtime_kind);
+  ModuleSP image = SwiftLanguageRuntime::findRuntime(process, runtime_kind);
   Target &target = process.GetTarget();
   if (!image) {
     // Don't diagnose a missing Objective-C runtime on platforms that

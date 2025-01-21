@@ -97,6 +97,12 @@ public:
   static SwiftLanguageRuntime *Get(lldb::ProcessSP process_sp) {
     return SwiftLanguageRuntime::Get(process_sp.get());
   }
+
+  enum class RuntimeKind { Swift, ObjC };
+
+  /// Returns the Module containing the {Swift, ObjC} runtime, if it exists.
+  static lldb::ModuleSP
+  findRuntime(Process &process, RuntimeKind runtime_kind = RuntimeKind::Swift);
   /// \}
 
   /// PluginInterface protocol.

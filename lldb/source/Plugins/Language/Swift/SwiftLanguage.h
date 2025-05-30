@@ -81,6 +81,7 @@ public:
   std::optional<bool>
   AreEqualForFrameComparison(const SymbolContext &sc1,
                              const SymbolContext &sc2) const override;
+
   //------------------------------------------------------------------
   // Static Functions
   //------------------------------------------------------------------

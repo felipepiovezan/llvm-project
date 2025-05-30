@@ -16,9 +16,11 @@
 #include "lldb/Interpreter/OptionValueProperties.h"
 #include "lldb/Symbol/SymbolFile.h"
 #include "lldb/Symbol/TypeList.h"
+#include "lldb/Symbol/VariableList.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/Stream.h"
 
+#include "llvm/ADT/MapVector.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/Threading.h"
 
@@ -574,3 +576,76 @@ bool SourceLanguage::IsObjC() const {
 bool SourceLanguage::IsCPlusPlus() const {
   return name == llvm::dwarf::DW_LNAME_C_plus_plus;
 }
+
+// BEGIN SWIFT
+// Implement LanguageCPlusPlus::GetParentNameIfClosure and upstream this.
+// rdar://152321823
+
+/// If `sc` represents a "closure"-like function (according to
+/// Language::GetParentNameIfClosure), returns all parent functions up to and
+/// including the first non-closure-like function. If `sc` is not a closure, or
+/// if the query does not make sense for `language`, returns an empty list.
+static llvm::SmallVector<Function *>
+GetParentFunctionsWhileClosure(const SymbolContext &sc,
+                               const Language &language) {
+  // The algorithm below terminates on the assumption that
+  // `GetParentNameIfClosure` produces an empty string when composing that
+  // function with itself enough times. For safety, define an upper limit.
+  constexpr auto upper_limit = 8;
+
+  llvm::SmallVector<Function *> parents;
+  Function *root = sc.function;
+  if (root == nullptr)
+    return parents;
+
+  for (int idx = 0; idx < upper_limit; idx++) {
+    ConstString mangled = root->GetMangled().GetMangledName();
+    std::string parent = language.GetParentNameIfClosure(mangled);
+    if (parent.empty())
+      break;
+
+    // Find the enclosing function, if it exists.
+    SymbolContextList sc_list;
+    Module::LookupInfo lookup_info(
+        ConstString(parent), lldb::FunctionNameType::eFunctionNameTypeFull,
+        lldb::eLanguageTypeSwift);
+    sc.module_sp->FindFunctions(lookup_info, CompilerDeclContext(),
+                                ModuleFunctionSearchOptions(), sc_list);
+    if (sc_list.GetSize() != 1 || sc_list[0].function == nullptr)
+      break;
+    parents.push_back(sc_list[0].function);
+    root = sc_list[0].function;
+  }
+  return parents;
+}
+
+/// Given a list of functions, returns a map: Function -> VariableList
+/// containing local variables of each function.
+static llvm::MapVector<Function *, VariableList>
+GetFuncToLocalVariablesMap(llvm::ArrayRef<Function *> funcs) {
+  llvm::MapVector<Function *, VariableList> map;
+  for (Function *function : funcs) {
+    VariableList &variable_list = map[function];
+    Block &block = function->GetBlock(true /*can_create=*/);
+    block.AppendBlockVariables(
+        true /*can_create=*/, true /*get_child_block_variables=*/,
+        true /*stop_if_child_block_is_inlined_function=*/,
+        [](Variable *v) { return true; }, &variable_list);
+  }
+  return map;
+}
+
+Function *Language::FindParentOfClosureWithVariable(
+    llvm::StringRef variable_name, const SymbolContext &closure_sc) const {
+  llvm::SmallVector<Function *> parent_funcs =
+      GetParentFunctionsWhileClosure(closure_sc, *this);
+  llvm::MapVector<Function *, VariableList> func_to_locals =
+      GetFuncToLocalVariablesMap(parent_funcs);
+
+  for (const auto &[func, locals] : func_to_locals)
+    for (const VariableSP &var_sp : locals)
+      if (var_sp->GetName() == variable_name)
+        return func;
+  return nullptr;
+}
+// END SWIFT

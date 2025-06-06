@@ -252,7 +252,6 @@ public:
   rnb_err_t HandlePacket_stop_process(const char *p);
   rnb_err_t HandlePacket_QSetDetachOnError(const char *p);
   rnb_err_t HandlePacket_jGetDyldProcessState(const char *p);
-  rnb_err_t HandlePacket_jSwiftTasks(const char *p);
   rnb_err_t SendStopReplyPacketForThread(nub_thread_t tid);
   rnb_err_t SendHexEncodedBytePacket(const char *header, const void *buf,
                                      size_t buf_len, const char *footer);

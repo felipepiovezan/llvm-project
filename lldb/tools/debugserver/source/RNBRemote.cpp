@@ -5657,78 +5657,6 @@ rnb_err_t RNBRemote::HandlePacket_jThreadsInfo(const char *p) {
   return SendErrorPacket("E85");
 }
 
-struct TSDInfo {
-  uint64_t plo_pthread_tsd_base_address_offset;
-  uint64_t plo_pthread_tsd_entry_size;
-  uint64_t plo_pthread_tsd_base_offset;
-
-  bool all_valid() const {
-    // Historically, this code only checked these two entries, which seems to
-    // accidentally work because consumers of this information gracefully handle
-    // invalid values.
-    return plo_pthread_tsd_entry_size != INVALID_NUB_ADDRESS &&
-           plo_pthread_tsd_base_offset != INVALID_NUB_ADDRESS;
-  }
-};
-
-static TSDInfo ExtractTSDInfoFromBuffer(const char *buffer) {
-  TSDInfo tsd_info;
-  tsd_info.plo_pthread_tsd_base_address_offset =
-      get_integer_value_for_key_name_from_json(
-          "plo_pthread_tsd_base_address_offset", buffer);
-  tsd_info.plo_pthread_tsd_base_offset =
-      get_integer_value_for_key_name_from_json("plo_pthread_tsd_base_offset",
-                                               buffer);
-  tsd_info.plo_pthread_tsd_entry_size =
-      get_integer_value_for_key_name_from_json("plo_pthread_tsd_entry_size",
-                                               buffer);
-  return tsd_info;
-}
-
-
-static std::vector<uint64_t> GetTSDAddresses(nub_process_t pid,
-                                             TSDInfo tsd_info) {
-  std::vector<uint64_t> tsd_addresses;
-  if (!tsd_info.all_valid())
-    return tsd_addresses;
-
-  nub_size_t num_threads = DNBProcessGetNumThreads(pid);
-  tsd_addresses.reserve(num_threads);
-
-  for (nub_size_t thread_idx = 0; thread_idx < num_threads; ++thread_idx) {
-    nub_thread_t tid = DNBProcessGetThreadAtIndex(pid, thread_idx);
-    tsd_addresses.push_back(DNBGetTSDAddressForThread(
-        pid, tid, tsd_info.plo_pthread_tsd_base_address_offset,
-        tsd_info.plo_pthread_tsd_base_offset,
-        tsd_info.plo_pthread_tsd_entry_size));
-  }
-
-  return tsd_addresses;
-}
-
-rnb_err_t RNBRemote::HandlePacket_jSwiftTasks(const char *buffer) {
-  auto make_error = [&] { return SendErrorPacket("E81"); };
-
-  if (!m_ctx.HasValidProcessID())
-    return make_error();
-
-  nub_process_t pid = m_ctx.ProcessID();
-  std::ostringstream json;
-
-  const char thread_extended_info_str[] = {"jSwiftTasks:{"};
-  if (strncmp(buffer, thread_extended_info_str,
-              sizeof(thread_extended_info_str) - 1))
-    return make_error();
-  buffer += strlen(thread_extended_info_str);
-
-  TSDInfo tsd_info = ExtractTSDInfoFromBuffer(buffer);
-  auto tsd_addresses = GetTSDAddresses(pid, tsd_info);
-  if (tsd_addresses.empty())
-    return make_error();
-
-  return SendPacket("OK");
-}
-
 rnb_err_t RNBRemote::HandlePacket_jThreadExtendedInfo(const char *p) {
   nub_process_t pid;
   std::ostringstream json;
@@ -5745,16 +5673,28 @@ rnb_err_t RNBRemote::HandlePacket_jThreadExtendedInfo(const char *p) {
     p += strlen(thread_extended_info_str);
 
     uint64_t tid = get_integer_value_for_key_name_from_json("thread", p);
+    uint64_t plo_pthread_tsd_base_address_offset =
+        get_integer_value_for_key_name_from_json(
+            "plo_pthread_tsd_base_address_offset", p);
+    uint64_t plo_pthread_tsd_base_offset =
+        get_integer_value_for_key_name_from_json("plo_pthread_tsd_base_offset",
+                                                 p);
+    uint64_t plo_pthread_tsd_entry_size =
+        get_integer_value_for_key_name_from_json("plo_pthread_tsd_entry_size",
+                                                 p);
+    uint64_t dti_qos_class_index =
+        get_integer_value_for_key_name_from_json("dti_qos_class_index", p);
+
     if (tid != INVALID_NUB_ADDRESS) {
       nub_addr_t pthread_t_value = DNBGetPThreadT(pid, tid);
 
-      TSDInfo tsd_info = ExtractTSDInfoFromBuffer(p);
       uint64_t tsd_address = INVALID_NUB_ADDRESS;
-      if (tsd_info.all_valid()) {
+      if (plo_pthread_tsd_entry_size != INVALID_NUB_ADDRESS &&
+          plo_pthread_tsd_base_offset != INVALID_NUB_ADDRESS &&
+          plo_pthread_tsd_entry_size != INVALID_NUB_ADDRESS) {
         tsd_address = DNBGetTSDAddressForThread(
-            pid, tid, tsd_info.plo_pthread_tsd_base_address_offset,
-            tsd_info.plo_pthread_tsd_base_offset,
-            tsd_info.plo_pthread_tsd_entry_size);
+            pid, tid, plo_pthread_tsd_base_address_offset,
+            plo_pthread_tsd_base_offset, plo_pthread_tsd_entry_size);
       }
 
       bool timed_out = false;

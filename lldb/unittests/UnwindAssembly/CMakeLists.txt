@@ -2,6 +2,10 @@ if ("AArch64" IN_LIST LLVM_TARGETS_TO_BUILD)
   add_subdirectory(ARM64)
 endif()
 
+if ("ARM" IN_LIST LLVM_TARGETS_TO_BUILD)
+  add_subdirectory(ARM)
+endif()
+
 if ("PowerPC" IN_LIST LLVM_TARGETS_TO_BUILD)
   add_subdirectory(PPC64)
 endif()

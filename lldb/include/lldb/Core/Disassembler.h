@@ -167,6 +167,8 @@ public:
 
   virtual bool IsLoad() = 0;
 
+  virtual bool IsReturn() = 0;
+
   virtual bool IsAuthenticated() = 0;
 
   bool CanSetBreakpoint();
@@ -366,6 +368,8 @@ public:
   bool HasDelaySlot() override;
 
   bool IsLoad() override;
+
+  bool IsReturn() override;
 
   bool IsAuthenticated() override;
 

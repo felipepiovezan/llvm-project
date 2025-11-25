@@ -218,10 +218,12 @@ bool UnwindAssemblyInstEmulation::GetNonCallSiteUnwindPlanFromAssembly(
               current_offset + m_branch_offset, m_state);
           inserted) {
         it->second.row.SetOffset(current_offset + m_branch_offset);
-        std::size_t dest_instr_index =
-            inst_list.GetIndexOfInstructionAtAddress(branch_address);
-        to_visit.push_front(dest_instr_index);
-        enqueued.insert(dest_instr_index);
+        if (std::size_t dest_instr_index =
+                inst_list.GetIndexOfInstructionAtAddress(branch_address);
+            dest_instr_index < inst_list.GetSize()) {
+          to_visit.push_front(dest_instr_index);
+          enqueued.insert(dest_instr_index);
+        }
       }
     }
 

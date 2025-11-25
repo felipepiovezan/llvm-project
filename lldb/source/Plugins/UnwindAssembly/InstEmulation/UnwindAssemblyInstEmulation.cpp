@@ -64,6 +64,18 @@ static void DumpUnwindRowsToLog(Log *log, AddressRange range,
   log->PutString(strm.GetString());
 }
 
+static std::string to_str(Instruction &inst, const InstructionList &inst_list) {
+  const bool show_address = true;
+  const bool show_bytes = true;
+  const bool show_control_flow_kind = false;
+  StreamString strm;
+  lldb_private::FormatEntity::Entry format;
+  FormatEntity::Parse("${frame.pc}: ", format);
+  inst.Dump(&strm, inst_list.GetMaxOpcocdeByteSize(), show_address, show_bytes,
+            show_control_flow_kind, nullptr, nullptr, nullptr, &format, 0);
+  return strm.GetString().str();
+}
+
 static void DumpInstToLog(Log *log, Instruction &inst,
                           const InstructionList &inst_list) {
   if (!log || !log->GetVerbose())
@@ -164,6 +176,8 @@ bool UnwindAssemblyInstEmulation::GetNonCallSiteUnwindPlanFromAssembly(
     Instruction &inst = *inst_list.GetInstructionAtIndex(current_index);
     to_visit.pop_back();
     DumpInstToLog(log, inst, inst_list);
+    llvm::outs() << llvm::formatv("{2} -- is_barrier = {1} -- {0}  || is_barrier = {1}\n",
+                                  to_str(inst, inst_list), inst.IsReturn(), 4*current_index);
 
     m_curr_row_modified = false;
     m_branch_offset = 0;

@@ -514,21 +514,20 @@ void collectSpillsAndAllocasFromInsts(
 
 void collectSpillsFromDbgInfo(SpillInfo &Spills, Function &F,
                               const SuspendCrossingInfo &Checker) {
-  // We don't want the layout of coroutine frame to be affected
-  // by debug information. So we only choose to salvage DbgValueInst for
-  // whose value is already in the frame.
-  // We would handle the dbg.values for allocas specially
   for (auto &Iter : Spills) {
     auto *V = Iter.first;
-    SmallVector<DbgValueInst *, 16> DVIs;
+    SmallVector<DbgVariableIntrinsic *, 16> DVIs;
     SmallVector<DbgVariableRecord *, 16> DVRs;
-    findDbgValues(DVIs, V, &DVRs);
-    for (DbgValueInst *DVI : DVIs)
-      if (Checker.isDefinitionAcrossSuspend(*V, DVI))
+    findDbgUsers(DVIs, V, &DVRs);
+
+    // If V is already going to be spilled, then also add any debug intrinsics
+    // using it so that they are rewritten in terms of the spill slot, which is
+    // more likely to be available when debugging.
+    for (DbgVariableIntrinsic *DVI : DVIs)
+      if (!Spills[V].empty())
         Spills[V].push_back(DVI);
-    // Add the instructions which carry debug info that is in the frame.
     for (DbgVariableRecord *DVR : DVRs)
-      if (Checker.isDefinitionAcrossSuspend(*V, DVR->Marker->MarkedInstr))
+      if (!Spills[V].empty())
         Spills[V].push_back(DVR->Marker->MarkedInstr);
   }
 }

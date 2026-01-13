@@ -2096,6 +2096,9 @@ static void doSplitCoroutine(Function &F, SmallVectorImpl<Function *> &Clones,
   auto &Shape = ABI.Shape;
   assert(Shape.CoroBegin);
 
+  //if (F.getName().contains("testTokenizerStream"))
+  //  __builtin_debugtrap();
+
   lowerAwaitSuspends(F, Shape);
 
   simplifySuspendPoints(Shape);

@@ -28,6 +28,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/OptimizedStructLayout.h"
 #include "llvm/Transforms/Coroutines/ABI.h"
 #include "llvm/Transforms/Coroutines/CoroInstr.h"
@@ -1086,6 +1087,9 @@ static void insertSpills(const FrameDataInfo &FrameData, coro::Shape &Shape) {
         ByValTy = Arg->getParamByValType();
     }
 
+    if (F->getName().contains("testTokenizerStream"))
+      __builtin_debugtrap();
+
     auto Index = FrameData.getFieldIndex(Def);
     Builder.SetInsertPoint(InsertPt->getParent(), InsertPt);
     auto *G = Builder.CreateConstInBoundsGEP2_32(
@@ -1101,6 +1105,11 @@ static void insertSpills(const FrameDataInfo &FrameData, coro::Shape &Shape) {
 
     BasicBlock *CurrentBlock = nullptr;
     Value *CurrentReload = nullptr;
+    llvm::outs() << "Spills = \n";
+    for (auto *U : E.second) {
+      U->print(llvm::outs(), true);
+      llvm::outs() << "\n";
+    }
     for (auto *U : E.second) {
       // If we have not seen the use block, create a load instruction to reload
       // the spilled value from the coroutine frame. Populates the Value pointer
@@ -1159,6 +1168,12 @@ static void insertSpills(const FrameDataInfo &FrameData, coro::Shape &Shape) {
 
       TinyPtrVector<DbgVariableRecord *> DVRDeclareValues =
           findDVRDeclareValues(Def);
+      llvm::outs() << llvm::formatv("DeclareValues = {0}\n", DVRDeclareValues.size());
+      for (auto *U : DVRDeclareValues) {
+        U->print(llvm::outs(), true);
+        llvm::outs() << "\n";
+      }
+      llvm::outs().flush();
       // Try best to find dbg.declare_value. If the spill is a temp, there may
       // not be a direct dbg.declare_value. Walk up the load chain to find one
       // from an alias.
@@ -2126,6 +2141,8 @@ void coro::normalizeCoroutine(Function &F, coro::Shape &Shape,
 }
 
 void coro::BaseABI::buildCoroutineFrame(bool OptimizeFrame) {
+  if (F.getName().contains("testTokenizerStream"))
+    __builtin_debugtrap();
   SuspendCrossingInfo Checker(F, Shape.CoroSuspends, Shape.CoroEnds);
   doRematerializations(F, Checker, IsMaterializable);
 

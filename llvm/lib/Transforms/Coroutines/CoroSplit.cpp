@@ -2088,6 +2088,35 @@ void coro::SwitchABI::splitCoroutine(Function &F, coro::Shape &Shape,
   SwitchCoroutineSplitter::split(F, Shape, Clones, TTI);
 }
 
+static void removeMultipleDebugDeclares(Function &F) {
+  DominatorTree DomTree(F);
+  auto IsReachable = [&](DbgVariableRecord &DVR) {
+    return isPotentiallyReachable(&F.getEntryBlock(), DVR.getParent(), nullptr,
+                                  &DomTree);
+  };
+  auto IsArgumentLocation = [](DbgVariableRecord *Record) {
+    Value *OriginalStorage = Record->getVariableLocationOp(0);
+    return isa<Argument>(OriginalStorage);
+  };
+
+  auto [_, DbgVariableRecords] = collectDbgVariableIntrinsics(F);
+
+  std::map<DILocalVariable *, SmallVector<DbgVariableRecord *>> VarToRecord;
+  for (DbgVariableRecord *DVR : DbgVariableRecords)
+    if ((DVR->isDbgDeclare() || DVR->isDbgDeclareValue()) && IsReachable(*DVR))
+      VarToRecord[DVR->getVariable()].push_back(DVR);
+
+  for (auto [Variable, Records] : VarToRecord) {
+    auto *It = llvm::find_if(Records, IsArgumentLocation);
+    if (It == Records.end())
+      continue;
+    llvm::for_each(Records, [It](DbgVariableRecord *Record) {
+      if (Record != *It)
+        Record->eraseFromParent();
+    });
+  }
+}
+
 static void doSplitCoroutine(Function &F, SmallVectorImpl<Function *> &Clones,
                              coro::BaseABI &ABI, TargetTransformInfo &TTI,
                              bool OptimizeFrame) {
@@ -2143,6 +2172,9 @@ static void doSplitCoroutine(Function &F, SmallVectorImpl<Function *> &Clones,
       coro::salvageDebugInfo(ArgToAllocaMap, *DVR, false /*UseEntryValue*/);
 
   removeCoroEndsFromRampFunction(Shape);
+
+  if (Shape.ABI == coro::ABI::Async)
+    removeMultipleDebugDeclares(F);
 
   if (shouldCreateNoAllocVariant)
     SwitchCoroutineSplitter::createNoAllocVariant(F, Shape, Clones);

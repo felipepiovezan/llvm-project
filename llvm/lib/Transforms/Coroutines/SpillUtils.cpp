@@ -465,13 +465,6 @@ void collectSpillsAndAllocasFromInsts(
     const coro::Shape &Shape) {
 
   for (Instruction &I : instructions(F)) {
-    if (F.getName().contains("testTokenizerStream"))
-      if (auto *Call = dyn_cast<CallBase>(&I))
-        if (auto *F = Call->getCalledFunction()) {
-          llvm::outs() << F->getName() << "\n";
-          if (F->getName() == "swift_task_alloc")
-            __builtin_debugtrap();
-        }
     // Values returned from coroutine structure intrinsics should not be part
     // of the Coroutine Frame.
     if (isNonSpilledIntrinsic(I) || &I == Shape.CoroBegin)

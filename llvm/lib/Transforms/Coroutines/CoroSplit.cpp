@@ -2122,22 +2122,15 @@ static void doSplitCoroutine(Function &F, SmallVectorImpl<Function *> &Clones,
   // This invalidates SwiftErrorOps in the Shape.
   replaceSwiftErrorOps(F, Shape, nullptr);
 
-  DominatorTree DomTree(F);
-  auto IsReachableBlock = [&](BasicBlock *BB) {
-    return isPotentiallyReachable(&F.getEntryBlock(), BB, nullptr,
-                                   &DomTree);
-  };
   // Salvage debug intrinsics that point into the coroutine frame in the
   // original function. The Cloner has already salvaged debug info in the new
   // coroutine funclets.
   SmallDenseMap<Argument *, AllocaInst *, 4> ArgToAllocaMap;
   auto [DbgInsts, DbgVariableRecords] = collectDbgVariableIntrinsics(F);
   for (auto *DDI : DbgInsts)
-    if (IsReachableBlock(DDI->getParent()))
-      coro::salvageDebugInfo(ArgToAllocaMap, *DDI, false /*UseEntryValue*/);
+    coro::salvageDebugInfo(ArgToAllocaMap, *DDI, false /*UseEntryValue*/);
   for (DbgVariableRecord *DVR : DbgVariableRecords)
-    if (IsReachableBlock(DVR->getParent()))
-      coro::salvageDebugInfo(ArgToAllocaMap, *DVR, false /*UseEntryValue*/);
+    coro::salvageDebugInfo(ArgToAllocaMap, *DVR, false /*UseEntryValue*/);
 
   removeCoroEndsFromRampFunction(Shape);
 

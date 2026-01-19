@@ -1107,8 +1107,15 @@ static void insertSpills(const FrameDataInfo &FrameData, coro::Shape &Shape) {
       // reference provided with the frame GEP.
       if (CurrentBlock != U->getParent()) {
         CurrentBlock = U->getParent();
-        Builder.SetInsertPoint(CurrentBlock,
-                               CurrentBlock->getFirstInsertionPt());
+
+        // If we're inserting on the same BB as the FramePointer, insert after
+        // its definition.
+        if (auto *FramePtrInst = dyn_cast<Instruction>(FramePtr);
+            FramePtrInst && FramePtrInst->getParent() == CurrentBlock)
+          Builder.SetInsertPoint(*FramePtrInst->getInsertionPointAfterDef());
+        else
+          Builder.SetInsertPoint(CurrentBlock,
+                                 CurrentBlock->getFirstInsertionPt());
 
         auto *GEP = GetFramePointer(E.first);
         GEP->setName(E.first->getName() + Twine(".reload.addr"));

@@ -205,6 +205,151 @@ public:
 };
 } // namespace
 
+// BEGIN SWIFT
+namespace {
+// Helper functions and classes used for emitting Swift async function
+// information.
+
+enum class AsyncKind {
+  AsyncEntry = 0,
+  AsyncRet = 1,
+  AsyncContinuation = 2,
+  NotAsync = 3,
+};
+
+static AsyncKind getAsyncKind(const MachineFunction &MF) {
+  const Function &Func = MF.getFunction();
+  if (Func.hasFnAttribute("async_entry"))
+    return AsyncKind::AsyncEntry;
+  if (Func.hasFnAttribute("async_ret"))
+    return AsyncKind::AsyncRet;
+  if (Func.hasFnAttribute("async_continuation"))
+    return AsyncKind::AsyncContinuation;
+  return AsyncKind::NotAsync;
+}
+
+/// Creates a section to place *the* pointer to the async table of this CU.
+static MCSection *createAsyncTablePointersSection(MCContext &Ctx) {
+  Triple::ObjectFormatType OF = Ctx.getTargetTriple().getObjectFormat();
+
+  switch (OF) {
+  case Triple::ELF:
+    // Program defined contents, occupies memory during execution.
+    return Ctx.getELFSection(".asyncptr", ELF::SHT_PROGBITS, ELF::SHF_ALLOC);
+  case Triple::MachO:
+    // No dead stripping, has local relocations.
+    return Ctx.getMachOSection("__DATA", "__asyncptr",
+                               MachO::S_ATTR_NO_DEAD_STRIP |
+                                   MachO::S_ATTR_LOC_RELOC,
+                               SectionKind::getReadOnlyWithRel());
+  case Triple::COFF:
+    return Ctx.getCOFFSection(".asyncptr",
+                              COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                  COFF::IMAGE_SCN_MEM_READ);
+  default:
+    break;
+  }
+  return nullptr;
+}
+
+class AsyncFuncHandler : public AsmPrinterHandler {
+public:
+  static constexpr auto AsyncTablePtrSymbolName = "__async_table_ptr";
+
+  AsyncFuncHandler(AsmPrinter &A) : Printer(A) {}
+
+protected:
+  void beginFunction(const MachineFunction *MF) override {
+    AsyncKind Kind = getAsyncKind(*MF);
+    if (Kind == AsyncKind::NotAsync)
+      return;
+    AsyncKinds.push_back(Kind);
+    MCSymbol *Start = Printer.getFunctionBegin();
+    if (!Start)
+      Start = Printer.createTempSymbol("");
+    Starts.push_back(Start);
+  }
+
+  void endFunction(const MachineFunction *MF) override {
+    if (getAsyncKind(*MF) == AsyncKind::NotAsync)
+      return;
+    MCSymbol *End = Printer.getFunctionEnd();
+    if (!End)
+      End = Printer.createTempSymbol("");
+    Ends.push_back(End);
+  }
+
+  void endModule() override {
+    if (Starts.empty())
+      return;
+    MCContext &Ctx = Printer.OutContext;
+    MCSection *AsyncTablePointersSections =
+        createAsyncTablePointersSection(Ctx);
+    if (AsyncTablePointersSections == nullptr)
+      return;
+
+    assert(Starts.size() == Ends.size());
+    assert(Starts.size() == AsyncKinds.size());
+
+    // Place the tables inside the text section so that references to functions
+    // are within the same section, and so that the table is always moved
+    // together with the code.
+    Printer.OutStreamer->switchSection(
+        Ctx.getObjectFileInfo()->getTextSection());
+    MCSymbol *ArraySym = Ctx.getOrCreateSymbol("__async_table");
+    Printer.OutStreamer->emitLabel(ArraySym);
+    emitTable(*ArraySym);
+
+    // Emit a section containing a pointer to the table itself. This is the only
+    // dynamic relocation needed.
+    Printer.OutStreamer->switchSection(AsyncTablePointersSections);
+    auto PtrSize = Printer.getPointerSize();
+    Printer.emitAlignment(Align(PtrSize));
+    Printer.OutStreamer->emitLabel(
+        Ctx.getOrCreateSymbol(AsyncTablePtrSymbolName));
+    Printer.OutStreamer->emitValue(MCSymbolRefExpr::create(ArraySym, Ctx),
+                                   PtrSize);
+  }
+
+private:
+  SmallVector<MCSymbol *> Starts;
+  SmallVector<MCSymbol *> Ends;
+  SmallVector<AsyncKind> AsyncKinds;
+  AsmPrinter &Printer;
+
+  /// Emits the contents for "__async_table", i.e. a list of tuples, one per
+  /// async funclets:
+  ///   (FuncStart, FuncSize, AsyncKind)
+  /// To save a dynamic relocation, FuncStart is expressed as the distance to
+  /// __async_table. The size is the distance between the start and end of the
+  /// function:
+  ///   (FuncStart - __async_table), (FuncEnd - FuncStart), AsyncKind
+  void emitTable(MCSymbol &ArraySym) {
+    // Emit a header with a version number and a bitfield, 4 bytes each.
+    // For version 1, the LSB identifies whether the table is sorted by address.
+    Printer.OutStreamer->emitInt64(1); // Version 1
+    Printer.OutStreamer->emitInt64(0); // Not sorted.
+
+    MCContext &Ctx = Printer.OutContext;
+    for (auto [Start, End, Kind] : llvm::zip(Starts, Ends, AsyncKinds)) {
+      const MCExpr *BeginExp =
+          MCBinaryExpr::createSub(MCSymbolRefExpr::create(&ArraySym, Ctx),
+                                  MCSymbolRefExpr::create(Start, Ctx), Ctx);
+      const MCExpr *SizeExp =
+          MCBinaryExpr::createSub(MCSymbolRefExpr::create(End, Ctx),
+                                  MCSymbolRefExpr::create(Start, Ctx), Ctx);
+      // For space efficiency, emit AsyncKind in the top two bits of the size.
+      uint32_t KindMask = static_cast<uint32_t>(Kind) << 30;
+      SizeExp = MCBinaryExpr::createOr(MCConstantExpr::create(KindMask, Ctx),
+                                       SizeExp, Ctx);
+      Printer.OutStreamer->emitValue(BeginExp, 4);
+      Printer.OutStreamer->emitValue(SizeExp, 4);
+    }
+  }
+};
+} // namespace
+// END SWIFT
+
 class llvm::AddrLabelMap {
   MCContext &Context;
   struct AddrLabelSymEntry {
@@ -645,6 +790,10 @@ bool AsmPrinter::doInitialization(Module &M) {
   // Emit tables for any value of cfguard flag (i.e. cfguard=1 or cfguard=2).
   if (mdconst::extract_or_null<ConstantInt>(M.getModuleFlag("cfguard")))
     EHHandlers.push_back(std::make_unique<WinCFGuard>(this));
+
+  // BEGIN SWIFT
+  Handlers.push_back(std::make_unique<AsyncFuncHandler>(*this));
+  // END SWIFT
 
   for (auto &Handler : Handlers)
     Handler->beginModule(&M);

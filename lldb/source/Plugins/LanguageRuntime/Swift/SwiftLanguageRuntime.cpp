@@ -2278,6 +2278,134 @@ protected:
   }
 };
 
+namespace {
+using TaskInfo = ReflectionContextInterface::AsyncTaskInfo;
+
+/// Finds the Thread that is currently running a task, otherwise creates a
+/// ThreadTask for it.
+static ThreadSP FindThreadForTask(ExecutionContext &exe_ctx,
+                                  const TaskInfo &task_info) {
+  // For running tasks, TaskInfo won't have frame information, but LLDB should.
+  if (task_info.isRunning) {
+    // See OperatingSystemSwiftTasks for how these are created.
+    constexpr uint64_t TASK_MASK = 0x0000000f00000000ULL;
+    uint64_t tid = task_info.id | TASK_MASK;
+
+    auto &thread_list = exe_ctx.GetProcessRef().GetThreadList();
+    if (ThreadSP thread = thread_list.FindThreadByID(tid, /*can_update=*/false))
+      return thread;
+  }
+
+  // There should always be frame information for Tasks that are not running. If
+  // not, fallback to runJob.
+  lldb::addr_t frame_zero_pc = task_info.async_backtrace_pcs.empty()
+                                   ? task_info.runJob
+                                   : task_info.async_backtrace_pcs[0];
+
+  return std::make_shared<ThreadTask>(
+      task_info.id, task_info.resumeAsyncContext, frame_zero_pc, exe_ctx);
+}
+
+/// Returns the current "frame zero" of the Task whose address is `task_addr`.
+static std::string
+GetTaskFrameZeroName(ExecutionContext &exe_ctx, addr_t task_addr,
+                     ThreadSafeReflectionContext &reflection_ctx) {
+  llvm::Expected<ReflectionContextInterface::AsyncTaskInfo> task_info =
+      reflection_ctx->asyncTaskInfo(task_addr);
+  if (!task_info) {
+    llvm::consumeError(task_info.takeError());
+    return "";
+  }
+
+  if (task_info->isComplete)
+    return "task completed";
+
+  StreamString str;
+  if (auto thread = FindThreadForTask(exe_ctx, *task_info))
+    if (auto frame = thread->GetStackFrameAtIndex(0))
+      frame->Dump(&str, /*show_frame_index=*/false, /*show_fullpaths=*/false);
+
+  return str.GetString().str();
+}
+
+/// Prints the tree of all tasks rooted at the task represented by `task_addr`.
+static void PrintTaskTree(addr_t task_addr, Stream &Stream,
+                          ExecutionContext &exe_ctx,
+                          ThreadSafeReflectionContext &reflection_ctx,
+                          int64_t &max_nodes) {
+  // Guard against corrupted data.
+  max_nodes--;
+  if (max_nodes <= 0) {
+    Stream << "... output truncated ...\n";
+    return;
+  }
+  Stream.Indent();
+
+  llvm::Expected<TaskInfo> task_info = reflection_ctx->asyncTaskInfo(task_addr);
+  if (!task_info) {
+    Stream << llvm::formatv("Task {0}: no information available\n", task_addr)
+                  .str();
+    llvm::consumeError(task_info.takeError());
+    return;
+  }
+
+  Stream << llvm::formatv(
+                "Task {0}: addr = {1:x}: {2}\n", task_info->id, task_addr,
+                GetTaskFrameZeroName(exe_ctx, task_addr, reflection_ctx))
+                .str();
+  Stream.IndentMore(2);
+  for (auto child : task_info->childTasks)
+    PrintTaskTree(child, Stream, exe_ctx, reflection_ctx, max_nodes);
+  Stream.IndentLess(2);
+}
+
+/// Returns the top-most parent Task of `task`, if it exists, otherwise
+/// returns `task` itself.
+static llvm::Expected<addr_t>
+FindRootParentOfTask(addr_t task_addr,
+                     ThreadSafeReflectionContext &reflection_ctx) {
+  addr_t parent_addr = task_addr;
+
+  // Limit to 100 iterations in case of data corruption.
+  for (auto _ : llvm::seq(100)) {
+    llvm::Expected<TaskInfo> parent_info =
+        reflection_ctx->asyncTaskInfo(parent_addr);
+    if (!parent_info)
+      return parent_info.takeError();
+    if (parent_info->parentTask == 0)
+      return parent_addr;
+    parent_addr = parent_info->parentTask;
+  }
+
+  return parent_addr;
+}
+
+/// For each task being executed in a thread, find its top-most parent.
+llvm::SmallVector<addr_t>
+FindRootsOfExecutingTasks(Process &process,
+                          ThreadSafeReflectionContext &reflection_ctx) {
+  TaskInspector task_inspector;
+  llvm::SmallVector<addr_t> root_tasks;
+
+  for (const ThreadSP &thread : process.GetThreadList().Threads()) {
+    if (!thread)
+      continue;
+    std::optional<lldb::addr_t> maybe_task_addr =
+        task_inspector.GetTaskAddrFromThreadLocalStorage(*thread);
+    if (!maybe_task_addr)
+      continue;
+    llvm::Expected<addr_t> root_parent =
+        FindRootParentOfTask(*maybe_task_addr, reflection_ctx);
+    if (root_parent)
+      root_tasks.push_back(*root_parent);
+    else
+      llvm::consumeError(root_parent.takeError());
+  }
+
+  return root_tasks;
+}
+} // namespace
+
 /// Construct a `ThreadTask` instance for a live (yet to be completed) Task
 /// variable contained in the first argument.
 static llvm::Expected<ThreadSP>
@@ -2400,6 +2528,46 @@ private:
   }
 };
 
+class CommandObjectLanguageSwiftTaskGraph final : public CommandObjectParsed {
+public:
+  CommandObjectLanguageSwiftTaskGraph(CommandInterpreter &interpreter)
+      : CommandObjectParsed(interpreter, "graph",
+                            "Print info about all the Tasks that are active "
+                            "and their parents and children.",
+                            "language swift task graph") {}
+
+private:
+  void DoExecute(Args &command, CommandReturnObject &result) override {
+    if (m_exe_ctx.GetProcessPtr() == nullptr) {
+      result.AppendError("must be run from a running process");
+      return;
+    }
+
+    auto *runtime = SwiftLanguageRuntime::Get(m_exe_ctx.GetProcessSP());
+    if (!runtime) {
+      result.AppendError("Failed to find Swift Language runtime");
+      return;
+    }
+
+    auto reflection_ctx = runtime->GetReflectionContext();
+    if (!reflection_ctx) {
+      result.AppendError("Failed to get a Swift reflection context");
+      return;
+    }
+
+    llvm::SmallVector<addr_t> root_task_addrs =
+        FindRootsOfExecutingTasks(m_exe_ctx.GetProcessRef(), reflection_ctx);
+    llvm::SmallSet<uint64_t, 32> Visited;
+    int64_t max_nodes = 10000;
+    for (auto root_addr : root_task_addrs)
+      if (Visited.insert(root_addr).second)
+        PrintTaskTree(root_addr, result.GetOutputStream(), m_exe_ctx,
+                      reflection_ctx, max_nodes);
+
+    result.SetStatus(lldb::eReturnStatusSuccessFinishResult);
+  }
+};
+
 class CommandObjectLanguageSwiftTaskInfo final : public CommandObjectParsed {
 public:
   CommandObjectLanguageSwiftTaskInfo(CommandInterpreter &interpreter)
@@ -2492,6 +2660,9 @@ public:
     LoadSubCommand(
         "info",
         CommandObjectSP(new CommandObjectLanguageSwiftTaskInfo(interpreter)));
+    LoadSubCommand(
+        "graph",
+        CommandObjectSP(new CommandObjectLanguageSwiftTaskGraph(interpreter)));
   }
 };
 

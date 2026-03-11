@@ -443,8 +443,11 @@ public:
     result.enqueuePriority = task_info.EnqueuePriority;
     result.resumeAsyncContext = task_info.ResumeAsyncContext;
     result.runJob = task_info.RunJob;
+    result.parentTask = task_info.ParentTask;
     for (auto child : task_info.ChildTasks)
       result.childTasks.push_back(child);
+    for (auto pc : task_info.AsyncBacktraceFrames)
+      result.async_backtrace_pcs.push_back(pc);
     return result;
   }
 

@@ -177,7 +177,9 @@ public:
     uint32_t enqueuePriority = 0;
     lldb::addr_t resumeAsyncContext = LLDB_INVALID_ADDRESS;
     lldb::addr_t runJob = LLDB_INVALID_ADDRESS;
+    lldb::addr_t parentTask = 0; // Use the same default as RemoteInspection.
     std::vector<lldb::addr_t> childTasks;
+    std::vector<lldb::addr_t> async_backtrace_pcs;
   };
   // The default limits are copied from swift-inspect.
   virtual llvm::Expected<AsyncTaskInfo>

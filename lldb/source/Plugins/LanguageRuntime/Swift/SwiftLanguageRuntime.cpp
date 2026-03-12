@@ -2448,9 +2448,10 @@ ThreadForTaskArgument(Args &command, ExecutionContext &exe_ctx) {
       if (task_info->isComplete)
         return llvm::createStringError("task has completed");
 
-      return std::make_shared<ThreadTask>(task_info->id,
-                                          task_info->resumeAsyncContext,
-                                          task_info->runJob, exe_ctx);
+      //return std::make_shared<ThreadTask>(task_info->id,
+      //                                    task_info->resumeAsyncContext,
+      //                                    task_info->runJob, exe_ctx);
+      return FindThreadForTask(exe_ctx, *task_info);
     }
 
   return llvm::createStringError("failed to access Task data from runtime");

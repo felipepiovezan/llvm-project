@@ -2406,10 +2406,10 @@ FindRootsOfExecutingTasks(Process &process,
 }
 } // namespace
 
-/// Construct a `ThreadTask` instance for a live (yet to be completed) Task
-/// variable contained in the first argument.
+/// Finds the Thread that is currently running a task represented by the task
+/// address in `command`, otherwise creates a ThreadTask for it.
 static llvm::Expected<ThreadSP>
-ThreadForLiveTaskArgument(Args &command, ExecutionContext &exe_ctx) {
+ThreadForTaskArgument(Args &command, ExecutionContext &exe_ctx) {
   if (!exe_ctx.GetFramePtr())
     return llvm::createStringError("no active frame selected");
 
@@ -2479,7 +2479,7 @@ private:
     }
 
     llvm::Expected<ThreadSP> thread_task =
-        ThreadForLiveTaskArgument(command, m_exe_ctx);
+        ThreadForTaskArgument(command, m_exe_ctx);
     if (auto error = thread_task.takeError()) {
       result.AppendError(toString(std::move(error)));
       return;
@@ -2514,7 +2514,7 @@ private:
     }
 
     llvm::Expected<ThreadSP> thread_task =
-        ThreadForLiveTaskArgument(command, m_exe_ctx);
+        ThreadForTaskArgument(command, m_exe_ctx);
     if (auto error = thread_task.takeError()) {
       result.AppendError(toString(std::move(error)));
       return;

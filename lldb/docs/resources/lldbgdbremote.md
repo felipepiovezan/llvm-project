@@ -738,6 +738,52 @@ This is a performance optimization, which speeds up debugging by avoiding
 multiple round-trips for retrieving thread information. The information from this
 packet can be retrieved using a combination of `qThreadStopInfo` and `m` packets.
 
+## MultiBreakpoint
+
+This packet allows setting and removing multiple breakpoints in one go. It
+concatenates multiple `Z` and `z` packets, separating them with a `;`.
+Formally:
+
+```
+$MultiBreakpoint:breakpoint_request[;breakpoint_request]*
+```
+
+Where each `breakpoint_request` is one of:
+
+```
+* z0,addr,kind
+* z1,addr,kind
+* z2,addr,kind
+* z3,addr,kind
+* z4,addr,kind
+* Z0,addr,kind[;cond_list…][;cmds:persist,cmd_list…]
+* Z1,addr,kind[;cond_list…][;cmds:persist,cmd_list…]
+* Z2,addr,kind
+* Z3,addr,kind
+* Z4,addr,kind
+```
+
+Each field has the same meaning as the corresponding packet in the GDB Remote
+Protocol.
+
+Note: there is no ambiguity in using `;` as a separator between
+`breakpoint_request`s. According to the GDB Remote Protocol specification, both
+`cond_list` and `cmd_list` start with an `X` character and contain no
+separators; it follows that a ";z" or ";Z" always indicate the start of a new
+request.
+
+The stub must execute the sequence of `breakpoint_request`s in the order they
+appear in the `MultiBreakpoint` packet. This is not an atomic operation:
+individual requests may fail, and the stub must process subsequent requests
+upon failure.
+
+The reply consists of a `;`-separated sequence of `OK`s or `E` strings, one per
+`breakpoint_request`, representing whether the `breakpoint_request` was
+successful.
+
+A stub that supports this packet must include `MultiBreakpoint+` in the reply
+to `qSupported`.
+
 ### MultiMemRead
 
 Read memory from multiple memory ranges.

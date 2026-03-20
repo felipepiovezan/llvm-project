@@ -266,6 +266,31 @@ public:
 private:
   RNBRemote(const RNBRemote &) = delete;
 
+  struct BreakpointResult {
+    enum class Kind { OK, Error, IllFormed, Unimplemented };
+
+    Kind kind;
+    uint8_t error_code = 0;
+    std::string message = "";
+    std::optional<std::string> file = std::nullopt;
+    std::optional<uint32_t> line = std::nullopt;
+
+    static BreakpointResult CreateOK() { return {Kind::OK}; }
+    static BreakpointResult CreateError(uint8_t code) {
+      return {Kind::Error, code};
+    }
+    static BreakpointResult CreateIllFormed(std::string msg, std::string file,
+                                            uint32_t line) {
+      return {Kind::IllFormed, 0, std::move(msg), std::move(file), line};
+    }
+    static BreakpointResult CreateUnimplemented() {
+      return {Kind::Unimplemented};
+    }
+  };
+
+  /// Core logic for a Z/z breakpoint request.
+  BreakpointResult ExecuteBreakpointRequest(const char *p);
+
 protected:
   rnb_err_t GetCommData();
   void CommDataReceived(const std::string &data);
@@ -359,6 +384,8 @@ protected:
                       bool wait);
   rnb_err_t SendPacket(const std::string &);
   rnb_err_t SendErrorPacket(std::string errcode,
+                            const std::string &errmsg = "");
+  rnb_err_t SendErrorPacket(uint32_t error_code,
                             const std::string &errmsg = "");
   std::string CompressString(const std::string &);
 

@@ -308,6 +308,10 @@ void RNBRemote::CreatePacketTable() {
   // `MultiMemRead` as an `M` packet.
   t.push_back(Packet(multi_mem_read, &RNBRemote::HandlePacket_MultiMemRead,
                      NULL, "MultiMemRead", "Read multiple memory addresses"));
+  // Same ordering concern: `MultiBreakpoint` must come before the `M` packet.
+  t.push_back(Packet(multi_breakpoint, &RNBRemote::HandlePacket_MultiBreakpoint,
+                     NULL, "MultiBreakpoint",
+                     "Set/remove multiple breakpoints at once"));
   t.push_back(Packet(write_memory, &RNBRemote::HandlePacket_M, NULL, "M",
                      "Write memory"));
   t.push_back(Packet(write_register, &RNBRemote::HandlePacket_P, NULL, "P",
@@ -3275,6 +3279,70 @@ rnb_err_t RNBRemote::HandlePacket_MultiMemRead(const char *p) {
   return SendPacket(reply_stream.str());
 }
 
+/// Split a MultiBreakpoint packet body into individual breakpoint requests. A
+/// ';' starts a new request only if it is followed by [Zz].
+static std::vector<std::string_view>
+SplitBreakpointRequests(const std::string_view packet) {
+  std::vector<std::string_view> requests;
+  size_t packet_size = packet.size();
+  size_t request_start = 0;
+
+  // Look for `;[zZ]`.
+  for (size_t i = 0; i + 1 < packet_size; ++i) {
+    if (packet[i] != ';')
+      continue;
+    char next_char = packet[i + 1];
+    if (next_char == 'Z' || next_char == 'z') {
+      requests.emplace_back(packet.substr(request_start, i - request_start));
+      request_start = i + 1;
+    }
+  }
+  requests.emplace_back(packet.substr(request_start));
+  return requests;
+}
+
+rnb_err_t RNBRemote::HandlePacket_MultiBreakpoint(const char *p) {
+  const std::string_view packet_name("MultiBreakpoint:");
+  std::string_view packet(p);
+
+  if (!starts_with(packet, packet_name))
+    return HandlePacket_ILLFORMED(__FILE__, __LINE__, p,
+                                  "Invalid MultiBreakpoint packet prefix");
+
+  packet.remove_prefix(packet_name.size());
+
+  if (packet.empty())
+    return HandlePacket_ILLFORMED(__FILE__, __LINE__, p,
+                                  "MultiBreakpoint has no requests");
+
+  std::ostringstream reply_stream;
+  bool first = true;
+  for (std::string_view request : SplitBreakpointRequests(packet)) {
+    BreakpointResult result =
+        ExecuteBreakpointRequest(std::string(request).c_str());
+    if (!first)
+      reply_stream << ";";
+    switch (result.kind) {
+    case BreakpointResult::Kind::OK:
+      reply_stream << "OK";
+      break;
+    case BreakpointResult::Kind::Error: {
+      char error_str[8];
+      snprintf(error_str, sizeof(error_str), "E%02x", result.error_code);
+      reply_stream << error_str;
+      break;
+    }
+    case BreakpointResult::Kind::IllFormed:
+    case BreakpointResult::Kind::Unimplemented:
+      reply_stream << "E03";
+      break;
+    }
+    first = false;
+  }
+
+  return SendPacket(reply_stream.str());
+}
+
 // Read memory, sent it up as binary data.
 // Usage:  xADDR,LEN
 // ADDR and LEN are both base 16.
@@ -3629,6 +3697,7 @@ rnb_err_t RNBRemote::HandlePacket_qSupported(const char *p) {
     reply << "memory-tagging+;";
 
   reply << "MultiMemRead+;";
+  reply << "MultiBreakpoint+;";
   return SendPacket(reply.str().c_str());
 }
 

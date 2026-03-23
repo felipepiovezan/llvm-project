@@ -9,7 +9,6 @@ from lldbsuite.test.lldbtest import *
 from lldbsuite.test import lldbutil
 
 
-@skipUnlessDarwin # Remove once lldbsever support is implemented.
 @skipIfOutOfTreeDebugserver
 class TestMultiBreakpoint(TestBase):
     def send_packet(self, packet_str):

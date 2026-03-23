@@ -199,6 +199,9 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
   RegisterMemberFunctionHandler(StringExtractorGDBRemote::eServerPacketType_z,
                                 &GDBRemoteCommunicationServerLLGS::Handle_z);
   RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_MultiBreakpoint,
+      &GDBRemoteCommunicationServerLLGS::Handle_MultiBreakpoint);
+  RegisterMemberFunctionHandler(
       StringExtractorGDBRemote::eServerPacketType_QPassSignals,
       &GDBRemoteCommunicationServerLLGS::Handle_QPassSignals);
 
@@ -3123,6 +3126,61 @@ GDBRemoteCommunicationServerLLGS::Handle_z(StringExtractorGDBRemote &packet) {
                                 ExecuteRemoveBreakpoint(packet.GetStringRef()));
 }
 
+/// Split a MultiBreakpoint packet body into individual breakpoint requests. A
+/// ';' starts a new request only if it is followed by [Zz].
+static std::vector<llvm::StringRef>
+SplitBreakpointRequests(llvm::StringRef packet) {
+  std::vector<llvm::StringRef> requests;
+  size_t request_start = 0;
+  for (size_t i = 0; i + 1 < packet.size(); ++i) {
+    if (packet[i] != ';')
+      continue;
+    char next_char = packet[i + 1];
+    if (next_char == 'Z' || next_char == 'z') {
+      requests.push_back(packet.substr(request_start, i - request_start));
+      request_start = i + 1;
+    }
+  }
+  requests.push_back(packet.substr(request_start));
+  return requests;
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_MultiBreakpoint(
+    StringExtractorGDBRemote &packet) {
+  llvm::StringRef packet_str = packet.GetStringRef();
+  if (!packet_str.consume_front("MultiBreakpoint:"))
+    return SendIllFormedResponse(packet,
+                                 "Invalid MultiBreakpoint packet prefix");
+
+  if (packet_str.empty())
+    return SendIllFormedResponse(packet, "MultiBreakpoint has no requests");
+
+  StreamString response;
+  bool first = true;
+  for (llvm::StringRef request : SplitBreakpointRequests(packet_str)) {
+    BreakpointResult result = request.starts_with("Z")
+                                  ? ExecuteSetBreakpoint(request)
+                                  : ExecuteRemoveBreakpoint(request);
+    if (!first)
+      response.PutChar(';');
+    switch (result.kind) {
+    case BreakpointResult::Kind::OK:
+      response.PutCString("OK");
+      break;
+    case BreakpointResult::Kind::Error:
+      response.Format("E{0:X-2}", result.error_code);
+      break;
+    case BreakpointResult::Kind::IllFormed:
+      response.PutCString("E03");
+      break;
+    }
+    first = false;
+  }
+
+  return SendPacketNoLock(response.GetString());
+}
+
 GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationServerLLGS::Handle_s(StringExtractorGDBRemote &packet) {
   Log *log = GetLog(LLDBLog::Process | LLDBLog::Thread);
@@ -4338,6 +4396,7 @@ std::vector<std::string> GDBRemoteCommunicationServerLLGS::HandleFeatures(
                             "QListThreadsInStopReply+",
                             "qXfer:features:read+",
                             "QNonStop+",
+                            "MultiBreakpoint+",
                         });
 
   // report server-only features

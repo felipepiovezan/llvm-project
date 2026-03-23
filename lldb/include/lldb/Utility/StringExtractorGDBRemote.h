@@ -162,6 +162,7 @@ public:
     eServerPacketType_X,
     eServerPacketType_Z,
     eServerPacketType_z,
+    eServerPacketType_MultiBreakpoint,
 
     eServerPacketType__M,
     eServerPacketType__m,

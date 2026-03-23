@@ -431,6 +431,8 @@ StringExtractorGDBRemote::GetServerPacketType() const {
     return eServerPacketType_m;
 
   case 'M':
+    if (PACKET_STARTS_WITH("MultiBreakpoint:"))
+      return eServerPacketType_MultiBreakpoint;
     return eServerPacketType_M;
 
   case 'p':

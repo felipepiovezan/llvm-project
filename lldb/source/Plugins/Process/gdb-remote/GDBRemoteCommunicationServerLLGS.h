@@ -216,6 +216,8 @@ protected:
 
   PacketResult Handle_z(StringExtractorGDBRemote &packet);
 
+  PacketResult Handle_MultiBreakpoint(StringExtractorGDBRemote &packet);
+
   PacketResult Handle_s(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_qXfer(StringExtractorGDBRemote &packet);

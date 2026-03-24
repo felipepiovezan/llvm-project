@@ -3268,6 +3268,24 @@ size_t ProcessGDBRemote::PutSTDIN(const char *src, size_t src_len,
   return 0;
 }
 
+static Status
+CallEnableOnEach(ProcessGDBRemote &proc,
+                 StopPointSiteList<lldb_private::BreakpointSite> &site_list) {
+  llvm::Error joined = llvm::Error::success();
+  site_list.ForEach([&](BreakpointSite *site) {
+    Status status = proc.EnableBreakpointSite(site);
+    joined = llvm::joinErrors(std::move(joined), status.takeError());
+  });
+  return Status::FromError(std::move(joined));
+}
+
+Status ProcessGDBRemote::EnableBreakpointSiteList(
+    StopPointSiteList<lldb_private::BreakpointSite> &site_list) {
+  if (!m_gdb_comm.GetMultiBreakpointSupported())
+    return CallEnableOnEach(*this, site_list);
+  return CallEnableOnEach(*this, site_list);
+}
+
 Status ProcessGDBRemote::EnableBreakpointSite(BreakpointSite *bp_site) {
   Status error;
   assert(bp_site != nullptr);

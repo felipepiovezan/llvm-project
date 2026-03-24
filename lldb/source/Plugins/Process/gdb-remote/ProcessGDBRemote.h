@@ -170,6 +170,9 @@ public:
   // Process Breakpoints
   Status EnableBreakpointSite(BreakpointSite *bp_site) override;
 
+  Status EnableBreakpointSiteList(
+      StopPointSiteList<lldb_private::BreakpointSite> &site_list) override;
+
   Status DisableBreakpointSite(BreakpointSite *bp_site) override;
 
   // Process Watchpoints

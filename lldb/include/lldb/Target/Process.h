@@ -2206,6 +2206,13 @@ public:
         "error: {0} does not support enabling breakpoints", GetPluginName());
   }
 
+  virtual Status EnableBreakpointSiteList(
+      StopPointSiteList<lldb_private::BreakpointSite> &site_list) {
+    return Status::FromErrorStringWithFormatv(
+        "error: {0} does not support enabling breakpoints (list)",
+        GetPluginName());
+  }
+
   virtual Status DisableBreakpointSite(BreakpointSite *bp_site) {
     return Status::FromErrorStringWithFormatv(
         "error: {0} does not support disabling breakpoints", GetPluginName());

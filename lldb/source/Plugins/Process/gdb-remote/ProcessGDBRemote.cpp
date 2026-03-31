@@ -3312,7 +3312,8 @@ SendMultiBreakpointPacket(GDBRemoteCommunicationClient &gdb_comm,
 
   if (response.IsUnsupportedResponse())
     return llvm::createStringErrorV(
-        "MultiBreakpoint unsupported response: '{0}'", response.GetStringRef());
+        "MultiBreakpoint unsupported response: '{0}'",
+        response.GetStringRef());
 
   return response;
 }

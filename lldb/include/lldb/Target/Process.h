@@ -2242,6 +2242,10 @@ public:
   lldb::break_id_t CreateBreakpointSite(const lldb::BreakpointLocationSP &owner,
                                         bool use_hardware);
 
+  llvm::SmallVector<lldb::break_id_t>
+  CreateBreakpointSites(llvm::ArrayRef<lldb::BreakpointLocationSP> constituents,
+                        bool use_hardware);
+
   Status DisableBreakpointSiteByID(lldb::user_id_t break_id);
 
   Status EnableBreakpointSiteByID(lldb::user_id_t break_id);

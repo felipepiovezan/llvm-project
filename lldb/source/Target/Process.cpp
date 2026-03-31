@@ -1642,36 +1642,50 @@ static addr_t ComputeConstituentLoadAddress(BreakpointLocation &constituent,
 lldb::break_id_t
 Process::CreateBreakpointSite(const BreakpointLocationSP &constituent,
                               bool use_hardware) {
-  addr_t load_addr = ComputeConstituentLoadAddress(*constituent, *this);
+  return CreateBreakpointSites(constituent, use_hardware).front();
+}
 
-  if (load_addr == LLDB_INVALID_ADDRESS)
-    return LLDB_INVALID_BREAK_ID;
+llvm::SmallVector<lldb::break_id_t> Process::CreateBreakpointSites(
+    llvm::ArrayRef<lldb::BreakpointLocationSP> constituents,
+    bool use_hardware) {
+  llvm::SmallVector<lldb::break_id_t> ids;
+  for (const auto &constituent : constituents) {
+    addr_t load_addr = ComputeConstituentLoadAddress(*constituent, *this);
 
-  // Look up this breakpoint site. If it exists, then add this new
-  // constituent, otherwise create a new breakpoint site and add it.
-  if (BreakpointSiteSP bp_site_sp =
-          m_breakpoint_site_list.FindByAddress(load_addr)) {
-    bp_site_sp->AddConstituent(constituent);
-    constituent->SetBreakpointSite(bp_site_sp);
-    return bp_site_sp->GetID();
-  }
-  auto bp_site_sp = BreakpointSiteSP(
-      new BreakpointSite(constituent, load_addr, use_hardware));
-  Status error = EnableBreakpointSite(bp_site_sp.get());
-  if (error.Success()) {
-    constituent->SetBreakpointSite(bp_site_sp);
-    return m_breakpoint_site_list.Add(bp_site_sp);
-  }
+    if (load_addr == LLDB_INVALID_ADDRESS) {
+      ids.push_back(LLDB_INVALID_BREAK_ID);
+      continue;
+    }
 
-  if (ShouldShowError(*this) || use_hardware) {
-    // Report error for setting breakpoint...
-    GetTarget().GetDebugger().GetAsyncErrorStream()->Printf(
-        "warning: failed to set breakpoint site at 0x%" PRIx64
-        " for breakpoint %i.%i: %s\n",
-        load_addr, constituent->GetBreakpoint().GetID(), constituent->GetID(),
-        error.AsCString() ? error.AsCString() : "unknown error");
+    // Look up this breakpoint site. If it exists, then add this new
+    // constituent, otherwise create a new breakpoint site and add it.
+    if (BreakpointSiteSP bp_site_sp =
+            m_breakpoint_site_list.FindByAddress(load_addr)) {
+      bp_site_sp->AddConstituent(constituent);
+      constituent->SetBreakpointSite(bp_site_sp);
+      ids.push_back(bp_site_sp->GetID());
+      continue;
+    }
+    auto bp_site_sp = BreakpointSiteSP(
+        new BreakpointSite(constituent, load_addr, use_hardware));
+    Status error = EnableBreakpointSite(bp_site_sp.get());
+    if (error.Success()) {
+      constituent->SetBreakpointSite(bp_site_sp);
+      ids.push_back(m_breakpoint_site_list.Add(bp_site_sp));
+      continue;
+    }
+
+    if (ShouldShowError(*this) || use_hardware) {
+      // Report error for setting breakpoint...
+      GetTarget().GetDebugger().GetAsyncErrorStream()->Printf(
+          "warning: failed to set breakpoint site at 0x%" PRIx64
+          " for breakpoint %i.%i: %s\n",
+          load_addr, constituent->GetBreakpoint().GetID(), constituent->GetID(),
+          error.AsCString() ? error.AsCString() : "unknown error");
+    }
+    ids.push_back(LLDB_INVALID_BREAK_ID);
   }
-  return LLDB_INVALID_BREAK_ID;
+  return ids;
 }
 
 void Process::RemoveConstituentFromBreakpointSite(

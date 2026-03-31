@@ -19,6 +19,7 @@
 #include "lldb/Symbol/LineEntry.h"
 #include "lldb/Utility/UserID.h"
 #include "lldb/lldb-private.h"
+#include "llvm/ADT/ArrayRef.h"
 
 namespace lldb_private {
 
@@ -189,6 +190,10 @@ public:
 
   /// Try to resolve the breakpoint site for this location.
   llvm::Error ResolveBreakpointSite();
+
+  /// Try to resolve breakpoint sites for multiple locations at once.
+  static llvm::Error
+  ResolveBreakpointSites(llvm::ArrayRef<lldb::BreakpointLocationSP> locations);
 
   /// Clear this breakpoint location's breakpoint site - for instance when
   /// disabling the breakpoint.

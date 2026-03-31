@@ -494,28 +494,50 @@ lldb::BreakpointSiteSP BreakpointLocation::GetBreakpointSite() const {
 }
 
 llvm::Error BreakpointLocation::ResolveBreakpointSite() {
-  // This might be a facade location, which doesn't have an address.
-  // In that case, don't attempt to make a site.
-  if (m_bp_site_sp || IsFacade())
+  return ResolveBreakpointSites(shared_from_this());
+}
+
+llvm::Error BreakpointLocation::ResolveBreakpointSites(
+    llvm::ArrayRef<lldb::BreakpointLocationSP> locations) {
+  if (locations.empty())
     return llvm::Error::success();
 
-  Process *process = m_owner.GetTarget().GetProcessSP().get();
+  // All locations must belong to the same breakpoint to share use_hardware.
+  Breakpoint &bp = locations.front()->GetBreakpoint();
+  Process *process = bp.GetTarget().GetProcessSP().get();
   if (process == nullptr)
     return llvm::createStringError("no process");
 
-  lldb::break_id_t new_id =
-      process->CreateBreakpointSite(shared_from_this(), m_owner.IsHardware());
+  // Filter to locations that actually need resolving.
+  llvm::SmallVector<lldb::BreakpointLocationSP> to_resolve;
+  for (const auto &loc : locations) {
+    if (!loc->m_bp_site_sp && !loc->IsFacade())
+      to_resolve.push_back(loc);
+  }
 
-  if (new_id == LLDB_INVALID_BREAK_ID)
-    return llvm::createStringError(
-        llvm::formatv("Failed to add breakpoint site at {0:x}",
-                      m_address.GetOpcodeLoadAddress(&m_owner.GetTarget())));
+  if (to_resolve.empty())
+    return llvm::Error::success();
 
-  if (!IsResolved())
-    return llvm::createStringError(
-        "breakpoint site created but location is still unresolved");
+  llvm::SmallVector<lldb::break_id_t> ids =
+      process->CreateBreakpointSites(to_resolve, bp.IsHardware());
 
-  return llvm::Error::success();
+  llvm::Error joined = llvm::Error::success();
+  for (auto [loc, id] : llvm::zip_equal(to_resolve, ids)) {
+    if (id == LLDB_INVALID_BREAK_ID) {
+      joined = llvm::joinErrors(
+          std::move(joined),
+          llvm::createStringError(llvm::formatv(
+              "Failed to add breakpoint site at {0:x}",
+              loc->GetAddress().GetOpcodeLoadAddress(&bp.GetTarget()))));
+      continue;
+    }
+    if (!loc->IsResolved())
+      joined = llvm::joinErrors(
+          std::move(joined),
+          llvm::createStringError(
+              "breakpoint site created but location is still unresolved"));
+  }
+  return joined;
 }
 
 bool BreakpointLocation::SetBreakpointSite(BreakpointSiteSP &bp_site_sp) {

@@ -2240,7 +2240,7 @@ public:
   Status ClearBreakpointSiteByID(lldb::user_id_t break_id);
 
   lldb::break_id_t CreateBreakpointSite(const lldb::BreakpointLocationSP &owner,
-                                        bool use_hardware);
+                                        bool use_hardware, bool enable = true);
 
   Status DisableBreakpointSiteByID(lldb::user_id_t break_id);
 

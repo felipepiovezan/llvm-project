@@ -188,7 +188,12 @@ public:
   // The next section deals with this location's breakpoint sites.
 
   /// Try to resolve the breakpoint site for this location.
-  llvm::Error ResolveBreakpointSite();
+  ///
+  /// \param[in] enable
+  ///     If true (default), the breakpoint site is enabled immediately.
+  ///     If false, the site is created but not enabled, allowing the
+  ///     caller to batch-enable multiple sites later.
+  llvm::Error ResolveBreakpointSite(bool enable = true);
 
   /// Clear this breakpoint location's breakpoint site - for instance when
   /// disabling the breakpoint.

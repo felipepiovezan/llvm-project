@@ -10,8 +10,10 @@
 
 #include "lldb/Breakpoint/Breakpoint.h"
 #include "lldb/Breakpoint/BreakpointLocation.h"
+#include "lldb/Breakpoint/BreakpointLocationCollection.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Section.h"
+#include "lldb/Target/Process.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/ArchSpec.h"
@@ -164,15 +166,52 @@ void BreakpointLocationList::ClearAllBreakpointSites() {
 
 void BreakpointLocationList::ResolveAllBreakpointSites() {
   std::lock_guard<std::recursive_mutex> guard(m_mutex);
-  collection::iterator pos, end = m_locations.end();
   Log *log = GetLog(LLDBLog::Breakpoints);
 
-  for (pos = m_locations.begin(); pos != end; ++pos) {
-    if ((*pos)->IsEnabled()) {
-      if (llvm::Error error = (*pos)->ResolveBreakpointSite())
-        LLDB_LOG_ERROR(log, std::move(error), "{0}");
+  // Create site objects without enabling them.
+  StopPointSiteList<BreakpointSite> pending_sites;
+  for (const auto &loc : m_locations) {
+    if (!loc->IsEnabled())
+      continue;
+    if (llvm::Error error = loc->ResolveBreakpointSite(/*enable=*/false)) {
+      LLDB_LOG_ERROR(log, std::move(error), "{0}");
+      continue;
     }
+    if (BreakpointSiteSP site = loc->GetBreakpointSite();
+        site && !site->IsEnabled())
+      pending_sites.Add(site);
   }
+
+  if (pending_sites.IsEmpty())
+    return;
+
+  // Phase 2: Batch-enable all pending sites.
+  ProcessSP process_sp = m_owner.GetTarget().GetProcessSP();
+  if (process_sp) {
+    if (Status error = process_sp->EnableBreakpointSiteList(pending_sites);
+        error.Fail())
+      LLDB_LOG_ERROR(log, error.takeError(),
+                     "EnableBreakpointSiteList failed: {0}");
+  }
+
+  // Phase 3: Clean up sites that failed to enable.
+  pending_sites.ForEach([&](BreakpointSite *site) {
+    if (!site->IsEnabled()) {
+      LLDB_LOG(log,
+               "ResolveAllBreakpointSites: site at {0:x} failed to enable, "
+               "cleaning up",
+               site->GetLoadAddress());
+      // Clearing the site from each constituent will also remove the site from
+      // the process breakpoint site list once the last constituent is removed.
+      BreakpointLocationCollection constituents;
+      site->CopyConstituentsList(constituents);
+      for (size_t i = 0; i < constituents.GetSize(); ++i) {
+        if (llvm::Error error =
+                constituents.GetByIndex(i)->ClearBreakpointSite())
+          LLDB_LOG_ERROR(log, std::move(error), "{0}");
+      }
+    }
+  });
 }
 
 uint32_t BreakpointLocationList::GetHitCount() const {

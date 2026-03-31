@@ -493,7 +493,7 @@ lldb::BreakpointSiteSP BreakpointLocation::GetBreakpointSite() const {
   return m_bp_site_sp;
 }
 
-llvm::Error BreakpointLocation::ResolveBreakpointSite() {
+llvm::Error BreakpointLocation::ResolveBreakpointSite(bool enable) {
   // This might be a facade location, which doesn't have an address.
   // In that case, don't attempt to make a site.
   if (m_bp_site_sp || IsFacade())
@@ -503,8 +503,8 @@ llvm::Error BreakpointLocation::ResolveBreakpointSite() {
   if (process == nullptr)
     return llvm::createStringError("no process");
 
-  lldb::break_id_t new_id =
-      process->CreateBreakpointSite(shared_from_this(), m_owner.IsHardware());
+  lldb::break_id_t new_id = process->CreateBreakpointSite(
+      shared_from_this(), m_owner.IsHardware(), enable);
 
   if (new_id == LLDB_INVALID_BREAK_ID)
     return llvm::createStringError(

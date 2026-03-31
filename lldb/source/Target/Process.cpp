@@ -1584,7 +1584,7 @@ Status Process::EnableBreakpointSiteByID(lldb::user_id_t break_id) {
 
 lldb::break_id_t
 Process::CreateBreakpointSite(const BreakpointLocationSP &constituent,
-                              bool use_hardware) {
+                              bool use_hardware, bool enable) {
   addr_t load_addr = LLDB_INVALID_ADDRESS;
 
   bool show_error = true;
@@ -1652,6 +1652,12 @@ Process::CreateBreakpointSite(const BreakpointLocationSP &constituent,
       bp_site_sp.reset(
           new BreakpointSite(constituent, load_addr, use_hardware));
       if (bp_site_sp) {
+        if (!enable) {
+          // Deferred enable: add to the list without enabling. The caller
+          // is responsible for batch-enabling via EnableBreakpointSiteList.
+          constituent->SetBreakpointSite(bp_site_sp);
+          return m_breakpoint_site_list.Add(bp_site_sp);
+        }
         Status error = EnableBreakpointSite(bp_site_sp.get());
         if (error.Success()) {
           constituent->SetBreakpointSite(bp_site_sp);

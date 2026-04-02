@@ -38,6 +38,7 @@
 #include "GDBRemoteRegisterContext.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
 
 namespace lldb_private {
@@ -170,6 +171,9 @@ public:
   // Process Breakpoints
   Status EnableBreakpointSite(BreakpointSite *bp_site) override;
 
+  llvm::Error UpdateDelayedBreakpointSites();
+  llvm::Error UpdateDelayedBreakpointSitesNotBatched();
+
   Status DisableBreakpointSite(BreakpointSite *bp_site) override;
 
   // Process Watchpoints
@@ -254,6 +258,14 @@ public:
   void DidExec() override;
 
   llvm::Expected<bool> SaveCore(llvm::StringRef outfile) override;
+
+  enum class BreakpointAction { Enable, Disable };
+  struct BreakpointPacketInfo {
+    BreakpointSite &site;
+    size_t trap_opcode;
+    GDBStoppointType type;
+    BreakpointAction action;
+  };
 
 protected:
   friend class ThreadGDBRemote;
@@ -515,8 +527,20 @@ private:
   // directly because the map may reallocate. Pointers to these are contained
   // within instances of RegisterFlags.
   llvm::StringMap<std::unique_ptr<FieldEnum>> m_registers_enum_types;
+
+  struct DelayedBreakpointCache {
+    void Enqueue(lldb::BreakpointSiteSP site, BreakpointAction action);
+
+    // Iteration order in this container is important, so use MapVector.
+    std::map<lldb::BreakpointSiteSP, BreakpointAction> m_bpsites_to_change;
+  };
+
+  DelayedBreakpointCache m_delayed_breakpoints;
 };
 
+llvm::raw_ostream &
+operator<<(llvm::raw_ostream &stream,
+           const ProcessGDBRemote::BreakpointPacketInfo &info);
 } // namespace process_gdb_remote
 } // namespace lldb_private
 

@@ -32,8 +32,11 @@
 #include "lldb/Utility/ValueType.h"
 #include "lldb/ValueObject/ValueObject.h"
 #include "lldb/lldb-enumerations.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/Signposts.h"
 
 #include <memory>
 #include <optional>
@@ -396,6 +399,10 @@ protected:
 };
 
 #pragma mark CommandObjectFrameVariable
+
+/// Instrument `frame variable` execution with signposts when supported.
+static llvm::ManagedStatic<llvm::SignpostEmitter> g_frame_variable_signposts;
+
 // List images with associated information
 class CommandObjectFrameVariable : public CommandObjectParsed {
 public:
@@ -598,6 +605,11 @@ protected:
   }
 
   void DoExecute(Args &command, CommandReturnObject &result) override {
+    g_frame_variable_signposts->startInterval(this, "frame variable");
+    llvm::scope_exit end_signpost([this]() {
+      g_frame_variable_signposts->endInterval(this, "frame variable");
+    });
+
     // No need to check "frame" for validity as eCommandRequiresFrame ensures
     // it is valid
     StackFrame *frame = m_exe_ctx.GetFramePtr();

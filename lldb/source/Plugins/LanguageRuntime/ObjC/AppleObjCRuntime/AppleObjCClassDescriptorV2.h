@@ -133,13 +133,10 @@ private:
     bool m_has_relative_types;
     uint32_t m_count;
     lldb::addr_t m_first_ptr;
-
-    static llvm::Expected<method_list_t> Read(Process *process,
-                                              lldb::addr_t addr);
   };
 
-  static llvm::Expected<method_list_t>
-  GetMethodList(Process *process, lldb::addr_t method_list_ptr);
+  static llvm::Expected<llvm::SmallVector<method_list_t>>
+  ReadMethodLists(Process &process, llvm::ArrayRef<lldb::addr_t> addrs);
 
   struct method_t {
     lldb::addr_t m_name_ptr;

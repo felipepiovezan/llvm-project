@@ -207,38 +207,6 @@ ClassDescriptorV2::Read_class_row(Process *process,
   return class_ro_t::Read(process, objc_class.m_data_ptr);
 }
 
-llvm::Expected<ClassDescriptorV2::method_list_t>
-ClassDescriptorV2::method_list_t::Read(Process *process, lldb::addr_t addr) {
-  size_t size = sizeof(uint32_t)    // uint32_t entsize_NEVER_USE;
-                + sizeof(uint32_t); // uint32_t count;
-
-  DataBufferHeap buffer(size, '\0');
-  Status error;
-
-  if (ABISP abi_sp = process->GetABI())
-    addr = abi_sp->FixCodeAddress(addr);
-  process->ReadMemory(addr, buffer.GetBytes(), size, error);
-  if (error.Fail())
-    return error.takeError();
-
-  DataExtractor extractor(buffer.GetBytes(), size, process->GetByteOrder(),
-                          process->GetAddressByteSize());
-
-  lldb::offset_t cursor = 0;
-
-  uint32_t entsize_raw = extractor.GetU32_unchecked(&cursor);
-  bool is_small = (entsize_raw & 0x80000000) != 0;
-  bool has_direct_selector = (entsize_raw & 0x40000000) != 0;
-  bool has_relative_types = (entsize_raw & 0x20000000) != 0;
-  uint16_t entsize = entsize_raw & 0xfffc;
-  uint32_t count = extractor.GetU32_unchecked(&cursor);
-  addr_t first_ptr = addr + cursor;
-
-  return method_list_t{
-      entsize, is_small, has_direct_selector, has_relative_types,
-      count,   first_ptr};
-}
-
 void ClassDescriptorV2::method_t::ReadNames(
     llvm::MutableArrayRef<method_t> methods, Process &process) {
   std::vector<lldb::addr_t> str_addresses;
@@ -441,23 +409,49 @@ ClassDescriptorV2::relative_list_list_t::Read(Process *process,
   return relative_list_list_t{entsize, count, first_ptr};
 }
 
-llvm::Expected<ClassDescriptorV2::method_list_t>
-ClassDescriptorV2::GetMethodList(Process *process,
-                                 lldb::addr_t method_list_ptr) {
-  auto method_list =
-      ClassDescriptorV2::method_list_t::Read(process, method_list_ptr);
-  if (!method_list)
-    return method_list.takeError();
+llvm::Expected<llvm::SmallVector<ClassDescriptorV2::method_list_t>>
+ClassDescriptorV2::ReadMethodLists(Process &process,
+                                   llvm::ArrayRef<lldb::addr_t> addrs) {
+  size_t size = sizeof(uint32_t)    // uint32_t entsize_NEVER_USE;
+                + sizeof(uint32_t); // uint32_t count;
 
-  const size_t method_size =
-      method_t::GetSize(process, method_list->m_is_small);
-  if (method_list->m_entsize != method_size)
-    return llvm::createStringErrorV(
-        "method_list_t at address {0:x} has an entsize of {1:x}"
-        " but method size should be {2:x}",
-        method_list_ptr, method_list->m_entsize, method_size);
+  llvm::SmallVector<Range<addr_t, size_t>> mem_ranges =
+      llvm::to_vector(llvm::map_range(addrs, [&](addr_t addr) {
+        return Range<addr_t, size_t>(addr, size);
+      }));
 
-  return *method_list;
+  llvm::SmallVector<uint8_t, 0> buffer(addrs.size() * size, 0);
+  llvm::SmallVector<llvm::MutableArrayRef<uint8_t>> read_results =
+      process.ReadMemoryRanges(mem_ranges, buffer);
+
+  llvm::SmallVector<method_list_t> results;
+  results.reserve(addrs.size());
+  for (auto [addr, memory] : llvm::zip(addrs, read_results)) {
+    if (memory.size() != size)
+      return llvm::createStringErrorV(
+          "Failed to read method_list_t at address {0:x}", addr);
+    DataExtractor extractor(memory.data(), size, process.GetByteOrder(),
+                            process.GetAddressByteSize());
+    lldb::offset_t cursor = 0;
+    uint32_t entsize_raw = extractor.GetU32_unchecked(&cursor);
+    bool is_small = (entsize_raw & 0x80000000) != 0;
+    bool has_direct_selector = (entsize_raw & 0x40000000) != 0;
+    bool has_relative_types = (entsize_raw & 0x20000000) != 0;
+    uint16_t entsize = entsize_raw & 0xfffc;
+    uint32_t count = extractor.GetU32_unchecked(&cursor);
+    addr_t first_ptr = addr + cursor;
+
+    const size_t method_size = method_t::GetSize(&process, is_small);
+    if (entsize != method_size)
+      return llvm::createStringErrorV(
+          "method_list_t at address {0:x} has an entsize of {1:x}"
+          " but method size should be {2:x}",
+          addr, entsize, method_size);
+
+    results.push_back(method_list_t{entsize, is_small, has_direct_selector,
+                                    has_relative_types, count, first_ptr});
+  }
+  return results;
 }
 
 void ClassDescriptorV2::ProcessMethodList(
@@ -516,25 +510,26 @@ llvm::Error ClassDescriptorV2::ProcessRelativeMethodLists(
   if (!entries)
     return entries.takeError();
 
-  for (auto [entry_addr, entry] : llvm::zip(entry_addrs, *entries)) {
-    // 3. Calculate the pointer to the method_list_t from the
-    // relative_list_entry_t
-    const lldb::addr_t method_list_addr = entry_addr + entry.m_list_offset;
+  // 3. Compute the method_list_t address for each entry and read them all in a
+  // single batched memory read.
+  llvm::SmallVector<addr_t> method_list_addrs;
+  method_list_addrs.reserve(entries->size());
+  for (auto [entry_addr, entry] : llvm::zip(entry_addrs, *entries))
+    method_list_addrs.push_back(entry_addr + entry.m_list_offset);
 
-    // 4. Get the method_list_t from the pointer
-    llvm::Expected<method_list_t> method_list =
-        GetMethodList(process, method_list_addr);
-    if (!method_list)
-      return method_list.takeError();
+  auto method_lists = ReadMethodLists(*process, method_list_addrs);
+  if (!method_lists)
+    return method_lists.takeError();
 
-    // 5. Cache the result so we don't need to reconstruct it later.
-    m_image_to_method_lists[entry.m_image_index].emplace_back(*method_list);
+  for (auto [entry, method_list] : llvm::zip(*entries, *method_lists)) {
+    // 4. Cache the result so we don't need to reconstruct it later.
+    m_image_to_method_lists[entry.m_image_index].emplace_back(method_list);
 
-    // 6. If the relevant image is loaded, add the methods to the Decl
+    // 5. If the relevant image is loaded, add the methods to the Decl
     if (!m_runtime.IsSharedCacheImageLoaded(entry.m_image_index))
       continue;
 
-    ProcessMethodList(instance_method_func, *method_list);
+    ProcessMethodList(instance_method_func, method_list);
   }
 
   // We need to keep track of the last time we updated so we can re-update the
@@ -577,13 +572,12 @@ bool ClassDescriptorV2::Describe(
         return false;
       }
     } else {
-      llvm::Expected<method_list_t> base_method_list =
-          GetMethodList(process, class_ro->m_baseMethods_ptr);
-      if (base_method_list)
-        ProcessMethodList(instance_method_func, *base_method_list);
+      auto method_lists =
+          ReadMethodLists(*process, {class_ro->m_baseMethods_ptr});
+      if (method_lists)
+        ProcessMethodList(instance_method_func, method_lists->front());
       else
-        LLDB_LOG_ERROR(GetLog(LLDBLog::Types), base_method_list.takeError(),
-                       "{0}");
+        LLDB_LOG_ERROR(GetLog(LLDBLog::Types), method_lists.takeError(), "{0}");
     }
   }
 

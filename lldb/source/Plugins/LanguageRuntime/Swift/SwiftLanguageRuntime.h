@@ -141,6 +141,20 @@ public:
     return version && *version >= ConcurrencyDebugVersionBaseline &&
            *version <= ConcurrencyDebugVersionLatest;
   }
+
+  // These should match the values in swift/stdlib/public/Concurrency/Debug.h
+  enum class CurrentTaskStorageKind {
+    cxx_thread_local = 1,
+    global = 2,
+    pthread_reserved_key = 3,
+    pthread_allocated_key = 4,
+    last = 5,
+  };
+  struct ConcurrencyInfo {
+    std::optional<uint32_t> version;
+    std::optional<CurrentTaskStorageKind> task_storage_kind;
+  };
+  static ConcurrencyInfo FindConcurrencyInfo(Process &process);
   /// \}
 
   /// PluginInterface protocol.

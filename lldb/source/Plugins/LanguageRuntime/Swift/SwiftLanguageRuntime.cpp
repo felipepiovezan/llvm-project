@@ -317,6 +317,45 @@ FindSymbolForSwiftObject(Process &process, RuntimeKind runtime_kind,
   return {};
 }
 
+static std::optional<uint8_t>
+FindConcurrencyTaskStorageKind(Process &process, Module &concurrency_module) {
+  const Symbol *symbol = concurrency_module.FindFirstSymbolWithNameAndType(
+      ConstString("_swift_concurrency_debug_currentTaskStorageKind"));
+  if (!symbol)
+    return {};
+
+  addr_t symbol_addr = symbol->GetLoadAddress(&process.GetTarget());
+  if (symbol_addr == LLDB_INVALID_ADDRESS)
+    return {};
+  Status error;
+  uint64_t storage_kind = process.ReadUnsignedIntegerFromMemory(
+      symbol_addr, /*width*/ 1, /*fail_value=*/0, error);
+  if (error.Fail())
+    return {};
+  return storage_kind;
+}
+
+SwiftLanguageRuntime::ConcurrencyInfo
+SwiftLanguageRuntime::FindConcurrencyInfo(Process &process) {
+  ModuleSP concurrency_module = FindConcurrencyModule(process);
+  if (!concurrency_module)
+    return {};
+
+  std::optional<uint32_t> version =
+      ::FindConcurrencyDebugVersion(process, *concurrency_module);
+  if (!version)
+    return {};
+
+  std::optional<uint8_t> storage_kind =
+      ::FindConcurrencyTaskStorageKind(process, *concurrency_module);
+  // There are only four known values for this. See
+  // swift/stdlib/public/Concurrency/Debug.h
+  if (!storage_kind || storage_kind == 0 || storage_kind > 4)
+    return {version, std::nullopt};
+
+  return {version, CurrentTaskStorageKind{*storage_kind}};
+}
+
 static lldb::BreakpointResolverSP
 CreateExceptionResolver(const lldb::BreakpointSP &bkpt, bool catch_bp, bool throw_bp) {
   BreakpointResolverSP resolver_sp;

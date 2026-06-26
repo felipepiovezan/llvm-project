@@ -2448,13 +2448,13 @@ class TaskExplorer {
 public:
   TaskExplorer(ReflectionContextInterface &reflection_ctx, Process &process)
       : m_reflection_ctx(reflection_ctx) {
-    TaskInspector task_inspector;
+    auto task_finder = GetTaskFinder(process);
 
     for (const ThreadSP &thread : process.GetThreadList().Threads()) {
       if (!thread)
         continue;
       std::optional<lldb::addr_t> maybe_task_addr =
-          task_inspector.GetTaskAddrFromThreadLocalStorage(*thread);
+          task_finder->GetTaskAddrFromThreadLocalStorage(*thread);
       if (!maybe_task_addr)
         continue;
       int32_t max_nodes = 1000;
@@ -3002,9 +3002,9 @@ private:
         return;
       }
 
-      TaskInspector task_inspector;
+      auto task_finder = GetTaskFinder(m_exe_ctx.GetProcessRef());
       std::optional<lldb::addr_t> maybe_task_addr =
-          task_inspector.GetTaskAddrFromThreadLocalStorage(
+          task_finder->GetTaskAddrFromThreadLocalStorage(
               m_exe_ctx.GetThreadRef());
       if (!task_addr) {
         result.AppendError("could find the task address");
@@ -3613,10 +3613,6 @@ std::optional<lldb::addr_t> SwiftLanguageRuntime::TrySkipVirtualParentProlog(
 /// the runtime.
 static llvm::Expected<lldb::addr_t>
 ComputeTaskAddrLocationFromThreadLocalStorage(Thread &real_thread) {
-#if !SWIFT_THREADING_USE_RESERVED_TLS_KEYS
-  return llvm::createStringError(
-      "getting the current task from a thread is not supported");
-#else
   // Compute the thread local storage address for this thread.
   addr_t tsd_addr = LLDB_INVALID_ADDRESS;
 
@@ -3633,7 +3629,6 @@ ComputeTaskAddrLocationFromThreadLocalStorage(Thread &real_thread) {
   uint64_t task_ptr_offset_in_tls =
       swift::tls_get_key(swift::tls_key::concurrency_task) * ptr_size;
   return tsd_addr + task_ptr_offset_in_tls;
-#endif
 }
 
 /// Helper function to read all `pointers` from process memory at once.
@@ -3677,13 +3672,40 @@ static std::optional<addr_t> ReadPointer(Process &process,
   return MultiReadPointers(process, addr)[0];
 }
 
-std::optional<lldb::addr_t>
-TaskInspector::GetTaskAddrFromThreadLocalStorage(Thread &thread) {
-  return GetTaskAddrFromThreadLocalStorage(&thread)[0];
-}
+namespace {
+struct NoTaskFinder : TaskFinder {
+  llvm::SmallVector<std::optional<lldb::addr_t>>
+  GetTaskAddrFromThreadLocalStorage(llvm::ArrayRef<Thread *> threads) override {
+    return llvm::SmallVector<std::optional<lldb::addr_t>>(threads.size(),
+                                                          std::nullopt);
+  }
+};
+
+/// A class to find and cache the location of Task pointer inside TLS.
+struct PthreadReservedKeyTaskFinder : TaskFinder {
+  /// Inspects thread local storage to find the address of the currently
+  /// executing task, if any.
+  llvm::SmallVector<std::optional<lldb::addr_t>>
+  GetTaskAddrFromThreadLocalStorage(llvm::ArrayRef<Thread *> threads) override;
+
+private:
+  /// For each thread in `threads`, return the location of the its task
+  /// pointer, if it exists.
+  llvm::SmallVector<std::optional<lldb::addr_t>>
+  GetTaskAddrLocations(llvm::ArrayRef<Thread *> threads);
+
+  /// If reading from a cached task address location failed, invalidate the
+  /// cache and try again.
+  std::optional<lldb::addr_t> RetryRead(Thread &thread,
+                                        lldb::addr_t task_addr_location);
+
+  llvm::DenseMap<uint64_t, lldb::addr_t> m_tid_to_task_addr_location;
+};
+} // namespace
 
 llvm::SmallVector<std::optional<lldb::addr_t>>
-TaskInspector::GetTaskAddrLocations(llvm::ArrayRef<Thread *> threads) {
+PthreadReservedKeyTaskFinder::GetTaskAddrLocations(
+    llvm::ArrayRef<Thread *> threads) {
   llvm::SmallVector<std::optional<addr_t>> addr_locations;
   addr_locations.reserve(threads.size());
 
@@ -3707,7 +3729,8 @@ TaskInspector::GetTaskAddrLocations(llvm::ArrayRef<Thread *> threads) {
         ComputeTaskAddrLocationFromThreadLocalStorage(real_thread);
     if (!addr_loc) {
       LLDB_LOG_ERROR(GetLog(LLDBLog::OS), addr_loc.takeError(),
-                     "TaskInspector: failed to compute task address location "
+                     "PthreadReservedKeyTaskFinder: failed to compute task "
+                     "address location "
                      "from TLS: {0}");
       addr_locations.push_back(std::nullopt);
     } else
@@ -3716,8 +3739,9 @@ TaskInspector::GetTaskAddrLocations(llvm::ArrayRef<Thread *> threads) {
   return addr_locations;
 }
 
-std::optional<addr_t> TaskInspector::RetryRead(Thread &thread,
-                                               addr_t task_addr_location) {
+std::optional<addr_t>
+PthreadReservedKeyTaskFinder::RetryRead(Thread &thread,
+                                        addr_t task_addr_location) {
   Thread &real_thread =
       thread.GetBackingThread() ? *thread.GetBackingThread() : thread;
   user_id_t tid = real_thread.GetID();
@@ -3726,17 +3750,19 @@ std::optional<addr_t> TaskInspector::RetryRead(Thread &thread,
   if (!m_tid_to_task_addr_location.erase(tid))
     return std::nullopt;
 
-  LLDB_LOG(GetLog(LLDBLog::OS), "TaskInspector: evicted task location "
-                                "address due to invalid memory read");
+  LLDB_LOG(GetLog(LLDBLog::OS),
+           "PthreadReservedKeyTaskFinder: evicted task location "
+           "address due to invalid memory read");
 
   // The cached address could not be loaded. "This should never happen", but
   // recompute the address and try again for completeness.
   llvm::Expected<addr_t> task_addr_loc =
       ComputeTaskAddrLocationFromThreadLocalStorage(real_thread);
   if (!task_addr_loc) {
-    LLDB_LOG_ERROR(GetLog(LLDBLog::OS), task_addr_loc.takeError(),
-                   "TaskInspector: failed to compute task address location "
-                   "from TLS: {0}");
+    LLDB_LOG_ERROR(
+        GetLog(LLDBLog::OS), task_addr_loc.takeError(),
+        "PthreadReservedKeyTaskFinder: failed to compute task address location "
+        "from TLS: {0}");
     return std::nullopt;
   }
 
@@ -3748,7 +3774,7 @@ std::optional<addr_t> TaskInspector::RetryRead(Thread &thread,
 }
 
 llvm::SmallVector<std::optional<addr_t>>
-TaskInspector::GetTaskAddrFromThreadLocalStorage(
+PthreadReservedKeyTaskFinder::GetTaskAddrFromThreadLocalStorage(
     llvm::ArrayRef<Thread *> threads) {
   if (threads.empty())
     return {};
@@ -4011,5 +4037,27 @@ llvm::Expected<uint64_t> FindPrologueSize(Process &process,
         sc.GetFunctionName(Mangled::NamePreference::ePreferMangled)));
 
   return prologue_size;
+}
+
+using CurrentTaskStorageKind = SwiftLanguageRuntime::CurrentTaskStorageKind;
+
+std::unique_ptr<TaskFinder>
+GetTaskFinder(std::optional<CurrentTaskStorageKind> storage_kind) {
+  if (!storage_kind)
+    return std::make_unique<NoTaskFinder>();
+  switch (*storage_kind) {
+  case CurrentTaskStorageKind::pthread_reserved_key:
+    return std::make_unique<PthreadReservedKeyTaskFinder>();
+  case CurrentTaskStorageKind::cxx_thread_local:
+  case CurrentTaskStorageKind::pthread_allocated_key:
+  case CurrentTaskStorageKind::global:
+    break;
+  }
+  return std::make_unique<NoTaskFinder>();
+}
+
+std::unique_ptr<TaskFinder> GetTaskFinder(Process &process) {
+  return GetTaskFinder(
+      SwiftLanguageRuntime::FindConcurrencyInfo(process).task_storage_kind);
 }
 } // namespace lldb_private

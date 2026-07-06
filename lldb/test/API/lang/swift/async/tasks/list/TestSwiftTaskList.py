@@ -6,7 +6,9 @@ import lldbsuite.test.lldbutil as lldbutil
 class TestCase(TestBase):
 
     @skipEmbeddedSwift
-    @skipUnlessPlatform(["macosx"])
+    # Exercises the task finder on both storage kinds: pthread_reserved_key
+    # (Darwin) and cxx_thread_local (Linux).
+    @skipUnlessPlatform(["macosx", "linux"])
     @swiftTest
     def test_task_list(self):
         self.build()

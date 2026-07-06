@@ -134,8 +134,7 @@ OperatingSystem *OperatingSystemSwiftTasks::CreateInstance(Process *process,
     concurrency_info.task_storage_kind =
         CurrentTaskStorageKind::pthread_reserved_key;
 
-  return new OperatingSystemSwiftTasks(*process,
-                                       concurrency_info.task_storage_kind);
+  return new OperatingSystemSwiftTasks(*process, concurrency_info);
 }
 
 llvm::StringRef OperatingSystemSwiftTasks::GetPluginDescriptionStatic() {
@@ -146,8 +145,9 @@ OperatingSystemSwiftTasks::~OperatingSystemSwiftTasks() = default;
 
 OperatingSystemSwiftTasks::OperatingSystemSwiftTasks(
     lldb_private::Process &process,
-    std::optional<CurrentTaskStorageKind> storage_kind)
-    : OperatingSystem(&process), m_task_finder(GetTaskFinder(storage_kind)) {}
+    const SwiftLanguageRuntime::ConcurrencyInfo &concurrency_info)
+    : OperatingSystem(&process),
+      m_task_finder(GetTaskFinder(concurrency_info)) {}
 
 ThreadSP
 OperatingSystemSwiftTasks::FindOrCreateSwiftThread(ThreadList &old_thread_list,

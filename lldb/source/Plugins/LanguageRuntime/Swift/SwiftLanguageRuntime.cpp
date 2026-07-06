@@ -351,9 +351,9 @@ SwiftLanguageRuntime::FindConcurrencyInfo(Process &process) {
   // There are only four known values for this. See
   // swift/stdlib/public/Concurrency/Debug.h
   if (!storage_kind || storage_kind == 0 || storage_kind > 4)
-    return {version, std::nullopt};
+    return {version, std::nullopt, concurrency_module};
 
-  return {version, CurrentTaskStorageKind{*storage_kind}};
+  return {version, CurrentTaskStorageKind{*storage_kind}, concurrency_module};
 }
 
 static lldb::BreakpointResolverSP
@@ -4047,10 +4047,10 @@ llvm::Expected<uint64_t> FindPrologueSize(Process &process,
 using CurrentTaskStorageKind = SwiftLanguageRuntime::CurrentTaskStorageKind;
 
 std::unique_ptr<TaskFinder>
-GetTaskFinder(std::optional<CurrentTaskStorageKind> storage_kind) {
-  if (!storage_kind)
+GetTaskFinder(const SwiftLanguageRuntime::ConcurrencyInfo &info) {
+  if (!info.task_storage_kind)
     return std::make_unique<NoTaskFinder>();
-  switch (*storage_kind) {
+  switch (*info.task_storage_kind) {
   case CurrentTaskStorageKind::pthread_reserved_key:
     return std::make_unique<PthreadReservedKeyTaskFinder>();
   case CurrentTaskStorageKind::cxx_thread_local:
@@ -4062,7 +4062,6 @@ GetTaskFinder(std::optional<CurrentTaskStorageKind> storage_kind) {
 }
 
 std::unique_ptr<TaskFinder> GetTaskFinder(Process &process) {
-  return GetTaskFinder(
-      SwiftLanguageRuntime::FindConcurrencyInfo(process).task_storage_kind);
+  return GetTaskFinder(SwiftLanguageRuntime::FindConcurrencyInfo(process));
 }
 } // namespace lldb_private

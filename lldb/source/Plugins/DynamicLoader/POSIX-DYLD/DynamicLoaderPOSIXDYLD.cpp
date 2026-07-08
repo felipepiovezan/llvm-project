@@ -847,10 +847,15 @@ DynamicLoaderPOSIXDYLD::GetThreadLocalData(const lldb::ModuleSP module_sp,
     return LLDB_INVALID_ADDRESS;
   }
 
-  // Lookup the DTV structure for this thread.
-  addr_t dtv_ptr = tp + metadata.dtv_offset;
+  // Lookup the DTV structure for this thread. metadata.dtv_offset is the DTV
+  // pointer's offset within `struct pthread`. x86's thread pointer is that
+  // struct's base (DTV at tp + dtv_offset); on AArch64 it points straight at
+  // the TCB whose first word is the DTV (just tp).
+  const bool isAArch64 =
+      m_process->GetTarget().GetArchitecture().GetTriple().isAArch64();
+  addr_t dtv_ptr = isAArch64 ? tp : tp + metadata.dtv_offset;
   addr_t dtv = ReadPointer(dtv_ptr);
-  if (dtv == LLDB_INVALID_ADDRESS) {
+  if (dtv == 0 || dtv == LLDB_INVALID_ADDRESS) {
     LLDB_LOGF(log, "GetThreadLocalData error: fail to read dtv");
     return LLDB_INVALID_ADDRESS;
   }

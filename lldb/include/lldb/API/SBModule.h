@@ -305,6 +305,7 @@ private:
   friend class SBSymbolContext;
   friend class SBPlatform;
   friend class SBTarget;
+  friend class SBThread;
   friend class SBType;
 
   friend class lldb_private::python::SWIGBridge;

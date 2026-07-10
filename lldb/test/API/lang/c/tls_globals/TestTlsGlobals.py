@@ -129,3 +129,46 @@ class TlsGlobalTestCase(TestBase):
             VARIABLES_DISPLAYED_CORRECTLY,
             patterns=[r"\(int\) \$.* = 33"],
         )
+
+    @skipUnlessPlatform(["macos"])
+    def test_by_symbol(self):
+        """Read TLS variables located by symbol via SBThread.GetThreadLocalData.
+
+        Unlike the expr-based test above this needs no DW_AT_location, so it
+        also runs on AArch64 Linux, where the compiler emits none for TLS."""
+        self.build()
+        target, process, spawned_thread, _ = lldbutil.run_to_source_breakpoint(
+            self, "thread breakpoint", lldb.SBFileSpec("main.c")
+        )
+
+        def read_tls(thread, name):
+            sc_list = target.FindSymbols(name, lldb.eSymbolTypeAny)
+            self.assertGreaterEqual(sc_list.GetSize(), 1, "found symbol " + name)
+            sc = sc_list.GetContextAtIndex(0)
+            tls_file_addr = sc.symbol.GetStartAddress().GetFileAddress()
+            self.assertNotEqual(tls_file_addr, lldb.LLDB_INVALID_ADDRESS)
+            addr = thread.GetThreadLocalData(sc.module, tls_file_addr)
+            self.assertNotEqual(addr, lldb.LLDB_INVALID_ADDRESS)
+            error = lldb.SBError()
+            value = process.ReadUnsignedFromMemory(addr, 4, error)
+            self.assertSuccess(error)
+            return value
+
+        # The spawned thread doubled/tripled its own TLS copies.
+        self.assertEqual(read_tls(spawned_thread, "var_static"), 88)
+        self.assertEqual(read_tls(spawned_thread, "var_static2"), 66)
+        self.assertEqual(read_tls(spawned_thread, "var_shared"), 66)
+
+        # The main thread still sees the initial values.
+        main_thread = next(
+            (
+                t
+                for t in process.threads
+                if any(f.GetFunctionName() == "main" for f in t.frames)
+            ),
+            None,
+        )
+        self.assertIsNotNone(main_thread, "found the main thread")
+        self.assertEqual(read_tls(main_thread, "var_static"), 44)
+        self.assertEqual(read_tls(main_thread, "var_static2"), 22)
+        self.assertEqual(read_tls(main_thread, "var_shared"), 33)

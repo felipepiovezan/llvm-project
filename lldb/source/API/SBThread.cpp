@@ -15,6 +15,7 @@
 #include "lldb/API/SBFormat.h"
 #include "lldb/API/SBFrame.h"
 #include "lldb/API/SBFrameList.h"
+#include "lldb/API/SBModule.h"
 #include "lldb/API/SBProcess.h"
 #include "lldb/API/SBStream.h"
 #include "lldb/API/SBStructuredData.h"
@@ -333,6 +334,24 @@ lldb::tid_t SBThread::GetThreadID() const {
   if (thread_sp)
     return thread_sp->GetID();
   return LLDB_INVALID_THREAD_ID;
+}
+
+lldb::addr_t SBThread::GetThreadLocalData(lldb::SBModule module,
+                                          lldb::addr_t tls_file_addr) {
+  LLDB_INSTRUMENT_VA(this, module, tls_file_addr);
+
+  llvm::Expected<StoppedExecutionContext> exe_ctx =
+      GetStoppedExecutionContext(m_opaque_sp);
+  if (!exe_ctx) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::API), exe_ctx.takeError(), "{0}");
+    return LLDB_INVALID_ADDRESS;
+  }
+
+  ThreadSP thread_sp = m_opaque_sp->GetThreadSP();
+  ModuleSP module_sp = module.GetSP();
+  if (thread_sp && module_sp)
+    return thread_sp->GetThreadLocalData(module_sp, tls_file_addr);
+  return LLDB_INVALID_ADDRESS;
 }
 
 uint32_t SBThread::GetIndexID() const {

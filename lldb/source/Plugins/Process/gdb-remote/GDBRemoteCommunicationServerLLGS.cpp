@@ -2823,6 +2823,13 @@ GDBRemoteCommunicationServerLLGS::Handle_qMemoryRegionInfo(
       response.PutStringAsRawHex8(name.GetStringRef());
       response.PutChar(';');
     }
+
+    // Type: stack/heap classification, when known.
+    MemoryRegionInfo::OptionalBool is_stack = region_info.IsStackMemory();
+    if (is_stack == MemoryRegionInfo::eYes)
+      response.PutCString("type:stack;");
+    else if (is_stack == MemoryRegionInfo::eNo)
+      response.PutCString("type:heap;");
   }
 
   return SendPacketNoLock(response.GetString());

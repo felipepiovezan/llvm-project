@@ -106,7 +106,19 @@ INSTANTIATE_TEST_SUITE_P(
                     MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
                     MemoryRegionInfo::eYes, ConstString("[heap]"),
                     MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
-                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eDontKnow),
+            },
+            ""),
+        std::make_tuple(
+            "7ffcad8f7000-7ffcad918000 rw-p 00000000 00:00 0    [stack]",
+            MemoryRegionInfos{
+                MemoryRegionInfo(
+                    make_range(0x7ffcad8f7000, 0x7ffcad918000),
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
+                    MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
+                    MemoryRegionInfo::eYes, ConstString("[stack]"),
+                    MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                    MemoryRegionInfo::eYes, MemoryRegionInfo::eDontKnow),
             },
             ""),
         // Multiple entries

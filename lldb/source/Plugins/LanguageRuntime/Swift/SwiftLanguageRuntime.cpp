@@ -363,11 +363,35 @@ static std::optional<addr_t> FindSymbolLoadAddress(Target &target,
   return std::nullopt;
 }
 
+static std::optional<addr_t> FindGlobalVariableAddress(Process &process,
+                                                       StringRef name) {
+  Target &target = process.GetTarget();
+  if (std::optional<addr_t> addr = FindSymbolLoadAddress(target, name))
+    return addr;
+
+  // FIXME(wasm): Swift can't place globals in a specific address space, so the
+  // global itself won't be in the symbol table. However, wasm-ld places the GOT
+  // pointer for that symbol in addrspace(1); try to find it with the prefix
+  // "GOT.data.internal.".
+  if (!target.GetArchitecture().GetTriple().isWasm())
+    return std::nullopt;
+  std::optional<addr_t> got_addr = FindSymbolLoadAddress(
+      target, (llvm::Twine("GOT.data.internal.") + name).str());
+  if (!got_addr)
+    return std::nullopt;
+
+  Status error;
+  addr_t addr = process.ReadUnsignedIntegerFromMemory(
+      *got_addr, process.GetAddressByteSize(), LLDB_INVALID_ADDRESS, error);
+  if (error.Fail() || addr == 0 || addr == LLDB_INVALID_ADDRESS)
+    return std::nullopt;
+  return addr;
+}
+
 static std::optional<CurrentTaskStorageKind>
 FindDeferredStorageKind(Process &process, uint32_t concurrency_version) {
-  std::optional<addr_t> kind_addr = FindSymbolLoadAddress(
-      process.GetTarget(),
-      "_swift_concurrency_debug_current_task_storage_kind");
+  std::optional<addr_t> kind_addr = FindGlobalVariableAddress(
+      process, "_swift_concurrency_debug_current_task_storage_kind");
   if (!kind_addr)
     return std::nullopt;
 
@@ -4115,8 +4139,8 @@ static std::optional<addr_t> FindTaskTLSSlotAddr(Process &process) {
   // swift/Runtime/ConcurrencyDebug.h.
   constexpr uint64_t concurrency_task_tls_key = 3;
 
-  if (std::optional<addr_t> addr = FindSymbolLoadAddress(
-          process.GetTarget(), "_swift_concurrency_debug_global_tls_array"))
+  if (std::optional<addr_t> addr = FindGlobalVariableAddress(
+          process, "_swift_concurrency_debug_global_tls_array"))
     return *addr + concurrency_task_tls_key * process.GetAddressByteSize();
 
   LLDB_LOG(GetLog(LLDBLog::OS),

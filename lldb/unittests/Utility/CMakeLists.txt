@@ -52,6 +52,7 @@ add_lldb_unittest(UtilityTests
   UUIDTest.cpp
   VASprintfTest.cpp
   VirtualDataExtractorTest.cpp
+  WasmVirtualRegistersTest.cpp
   XcodeSDKTest.cpp
 
   LINK_COMPONENTS

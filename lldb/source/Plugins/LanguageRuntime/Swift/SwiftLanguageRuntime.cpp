@@ -23,8 +23,10 @@
 #include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
 #include "Plugins/TypeSystem/Swift/SwiftDemangle.h"
 #include "Utility/ARM64_DWARF_Registers.h"
+#include "Utility/WasmVirtualRegisters.h"
 #include "lldb/Breakpoint/StoppointCallbackContext.h"
 #include "lldb/Core/Debugger.h"
+#include "lldb/Core/Disassembler.h"
 #include "lldb/Core/JITSection.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Progress.h"
@@ -3447,6 +3449,15 @@ lldb::addr_t SwiftLanguageRuntime::GetAsyncContext(RegisterContext *regctx) {
     return LLDB_INVALID_ADDRESS;
 
   auto arch = regctx->CalculateTarget()->GetArchitecture();
+  if (arch.GetTriple().isWasm()) {
+    const RegisterInfo *local0 =
+        regctx->GetRegisterInfoAtIndex(GetWasmRegister(eWasmTagLocal, 0));
+    RegisterValue value;
+    if (!local0 || !regctx->ReadRegister(local0, value))
+      return LLDB_INVALID_ADDRESS;
+    return value.GetAsUInt64(LLDB_INVALID_ADDRESS);
+  }
+
   if (auto regnums = GetAsyncUnwindRegisterNumbers(arch.GetMachine())) {
     auto reg = regctx->ConvertRegisterKindToRegisterNumber(
         regnums->GetRegisterKind(), regnums->async_ctx_regnum);
@@ -3699,6 +3710,47 @@ DoesContinuationPointToSameFunction(addr_t async_reg, SymbolContext &sc,
   return sc.symbol->ContainsFileAddress(continuation_addr.GetFileAddress());
 }
 
+/// Returns true if the WebAssembly function containing \p pc writes local 0
+/// before \p pc.
+static llvm::Expected<bool> WritesWasmLocal0Before(Target &target,
+                                                   const Address &pc) {
+  Symbol *symbol = pc.CalculateSymbolContextSymbol();
+  if (!symbol)
+    return llvm::createStringError("no symbol");
+  // ObjectFileWasm records the local declarations, which are not instructions,
+  // as the prologue.
+  Address code_start = symbol->GetAddress();
+  code_start.Slide(symbol->GetPrologueByteSize());
+  const addr_t code_start_addr = code_start.GetFileAddress();
+  const addr_t pc_addr = pc.GetFileAddress();
+  if (pc_addr <= code_start_addr)
+    return false;
+
+  DisassemblerSP disassembler = Disassembler::DisassembleRange(
+      target.GetArchitecture(), nullptr, nullptr, nullptr, nullptr, target,
+      AddressRange(code_start, pc_addr - code_start_addr));
+  if (!disassembler)
+    return llvm::createStringError("could not disassemble %s",
+                                   symbol->GetName().AsCString("<unknown>"));
+  const InstructionList &insts = disassembler->GetInstructionList();
+  addr_t decoded_end = code_start_addr;
+  for (size_t i = 0, e = insts.GetSize(); i != e; ++i) {
+    InstructionSP inst = insts.GetInstructionAtIndex(i);
+    DataExtractor data;
+    inst->GetData(data);
+    if (IsWasmLocalWrite({data.GetDataStart(), data.GetByteSize()}, 0))
+      return true;
+    decoded_end =
+        inst->GetAddress().GetFileAddress() + inst->GetOpcode().GetByteSize();
+  }
+  // Decoding stops at the first instruction that LLDB cannot decode.
+  if (decoded_end != pc_addr)
+    return llvm::createStringError(
+        "could not decode all instructions before 0x%" PRIx64 " in %s", pc_addr,
+        symbol->GetName().AsCString("<unknown>"));
+  return false;
+}
+
 /// Returns true if the async register should be dereferenced once to obtain the
 /// CFA of the currently executing function. This is the case at the start of
 /// "Q" funclets, before the low level code changes the meaning of the async
@@ -3714,6 +3766,17 @@ static llvm::Expected<bool> IsIndirectContext(Process &process,
   if (!SwiftLanguageRuntime::IsSwiftAsyncAwaitResumePartialFunctionSymbol(
           mangled_name))
     return false;
+
+  // On WebAssembly, the async register is local 0. The funclet replaces the
+  // callee's context there with its own, with a single write in straight-line
+  // code before any call. So the transition point is exactly that write.
+  if (process.GetTarget().GetArchitecture().GetTriple().isWasm()) {
+    llvm::Expected<bool> written =
+        WritesWasmLocal0Before(process.GetTarget(), pc);
+    if (!written)
+      return written.takeError();
+    return !*written;
+  }
 
   // For arm64e, pointer authentication generates branches that cause stepping
   // algorithms to stop & unwind in more places. The "end of the prologue"

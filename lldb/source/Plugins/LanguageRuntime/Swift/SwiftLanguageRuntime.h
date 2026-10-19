@@ -252,6 +252,8 @@ public:
   GetFuncletNumber(llvm::StringRef name);
 
   /// Return the async context address using the target's specific register.
+  /// WebAssembly has no such register: Swift async functions receive the async
+  /// context in local 0.
   static lldb::addr_t GetAsyncContext(RegisterContext *regctx);
 
   static bool

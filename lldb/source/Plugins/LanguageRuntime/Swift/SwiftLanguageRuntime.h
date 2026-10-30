@@ -1079,14 +1079,15 @@ private:
 
 /// The target specific register numbers used for async unwinding.
 ///
-/// For UnwindPlans, these use eh_frame / dwarf register numbering.
+/// For UnwindPlans, these use eh_frame / dwarf register numbering, except on
+/// WebAssembly, whose async context is a local, which has no DWARF number.
 struct AsyncUnwindRegisterNumbers {
   uint32_t async_ctx_regnum;
   uint32_t pc_regnum;
+  lldb::RegisterKind kind = lldb::eRegisterKindDWARF;
 
-  /// All register numbers in this struct are given in the eRegisterKindDWARF
-  /// domain.
-  lldb::RegisterKind GetRegisterKind() const { return lldb::eRegisterKindDWARF; }
+  /// All register numbers in this struct are given in this domain.
+  lldb::RegisterKind GetRegisterKind() const { return kind; }
 };
 
 std::optional<AsyncUnwindRegisterNumbers>

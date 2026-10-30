@@ -3507,6 +3507,16 @@ GetAsyncUnwindRegisterNumbers(llvm::Triple::ArchType triple) {
     regnums.pc_regnum = arm64_dwarf::pc;
     return regnums;
   }
+  case llvm::Triple::wasm32:
+  case llvm::Triple::wasm64: {
+    AsyncUnwindRegisterNumbers regnums;
+    regnums.async_ctx_regnum = GetWasmRegister(eWasmTagLocal, 0);
+    // RegisterContextWasm gives a register the same number in every kind, so
+    // the PC is LLDB register LLDB_REGNUM_GENERIC_PC.
+    regnums.pc_regnum = LLDB_REGNUM_GENERIC_PC;
+    regnums.kind = eRegisterKindLLDB;
+    return regnums;
+  }
   default:
     return {};
   }
@@ -3964,16 +3974,18 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   row.SetRegisterLocationToIsConstant(regnums->async_ctx_regnum, *async_ctx,
                                       /*can_replace=*/false);
 
+  // The fallback reads the function pointer in the async context as the PC,
+  // which it is not on WebAssembly.
   if (std::optional<addr_t> pc_after_prologue = TrySkipVirtualParentProlog(
           *async_ctx, *process_sp, pc.GetModule().get()))
     row.SetRegisterLocationToIsConstant(regnums->pc_regnum, *pc_after_prologue,
                                         false);
-  else
+  else if (!arch.GetTriple().isWasm())
     row.SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
                                              false);
   row.SetUnspecifiedRegistersAreUndefined(true);
 
-  UnwindPlanSP plan = std::make_shared<UnwindPlan>(lldb::eRegisterKindDWARF);
+  UnwindPlanSP plan = std::make_shared<UnwindPlan>(regnums->GetRegisterKind());
   plan->AppendRow(row);
   plan->SetSourceName("Swift Transition-to-AsyncContext-Chain");
   // Make this plan more authoritative, so that the unwinding fallback
@@ -4005,18 +4017,20 @@ UnwindPlanSP SwiftLanguageRuntime::GetFollowAsyncContextUnwindPlan(
   Address pc;
   pc.SetLoadAddress(regctx->GetPC(), &process_sp->GetTarget());
   const unsigned num_indirections = 1;
+  // The fallback reads the function pointer in the async context as the PC,
+  // which it is not on WebAssembly.
   if (std::optional<addr_t> pc_after_prologue =
           TrySkipVirtualParentProlog(GetAsyncContext(regctx), *process_sp,
                                      pc.GetModule().get(), num_indirections))
     row.SetRegisterLocationToIsConstant(regnums->pc_regnum, *pc_after_prologue,
                                         false);
-  else
+  else if (!arch.GetTriple().isWasm())
     row.SetRegisterLocationToAtCFAPlusOffset(regnums->pc_regnum, ptr_size,
                                              false);
 
   row.SetUnspecifiedRegistersAreUndefined(true);
 
-  UnwindPlanSP plan = std::make_shared<UnwindPlan>(lldb::eRegisterKindDWARF);
+  UnwindPlanSP plan = std::make_shared<UnwindPlan>(regnums->GetRegisterKind());
   plan->AppendRow(row);
   plan->SetSourceName("Swift Following-AsyncContext-Chain");
   // Make this plan more authoritative, so that the unwinding fallback

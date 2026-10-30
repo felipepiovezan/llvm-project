@@ -38,11 +38,6 @@ uint32_t RegisterContextWasm::ConvertRegisterKindToRegisterNumber(
   return num;
 }
 
-size_t RegisterContextWasm::GetRegisterCount() {
-  // Wasm has no registers.
-  return 0;
-}
-
 const RegisterInfo *RegisterContextWasm::GetRegisterInfoAtIndex(size_t reg) {
   uint32_t tag = GetWasmVirtualRegisterTag(reg);
   if (tag == eWasmTagNotAWasmLocation)

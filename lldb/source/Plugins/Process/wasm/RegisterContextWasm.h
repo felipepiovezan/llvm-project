@@ -50,8 +50,6 @@ public:
 
   void InvalidateAllRegisters() override;
 
-  size_t GetRegisterCount() override;
-
   const RegisterInfo *GetRegisterInfoAtIndex(size_t reg) override;
 
   size_t GetRegisterSetCount() override;

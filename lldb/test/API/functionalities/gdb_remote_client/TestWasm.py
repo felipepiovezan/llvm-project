@@ -159,7 +159,24 @@ class FakeMemory:
         return self._memoryview[offset : offset + length]
 
     def contains(self, addr):
-        return addr - self._base_addr < len(self._memoryview)
+        return 0 <= addr - self._base_addr < len(self._memoryview)
+
+
+class FakeMemories:
+    """
+    Memory in more than one instance. Each instance has a linear memory of its
+    own, at addresses that carry its id, so one range cannot hold them all.
+    """
+
+    def __init__(self, memories):
+        self._memories = memories
+
+    def contains(self, addr):
+        return any(memory.contains(addr) for memory in self._memories)
+
+    def get_bytes(self, addr, length):
+        memory = next(memory for memory in self._memories if memory.contains(addr))
+        return memory.get_bytes(addr, length)
 
 
 class MyResponder(MockGDBServerResponder):
@@ -820,6 +837,52 @@ class TestWasm(GDBRemoteTestBase):
             ]
         )
         self.assertEqual([], self.global_reads_received(instance=False))
+
+    @skipIfAsan
+    @skipIfXmlSupportMissing
+    def test_function_pointer_from_multiple_instances(self):
+        """Test that a function pointer resolves in the table of the instance
+        that the variable belongs to, when every instance puts a function at the
+        same table index. A runtime that the native tests use runs one module,
+        so only a fake stub can load two."""
+
+        # function_pointer.yaml was created by compiling function_pointer.c to
+        # wasm and using obj2yaml on the output.
+        #
+        # $ clang -target wasm32 -nostdlib -Wl,--no-entry -Wl,--export-all -O0 -g -fdebug-compilation-dir=. -o function_pointer.wasm function_pointer.c
+        # $ obj2yaml function_pointer.wasm -o function_pointer.yaml
+        modules = [
+            self.build_wasm_module("test_wasm", "function_pointer.yaml"),
+            self.build_wasm_module(
+                "test_wasm_second",
+                "function_pointer.yaml",
+                module_id=SECOND_MODULE_ID,
+            ),
+        ]
+
+        # fp is at 0x10000 in the linear memory of each instance, and the
+        # element section of each puts its own callee at table index 1.
+        memories = []
+        for module in modules:
+            fp_addr = (module.module_id << 32) | 0x10000
+            memory = FakeMemory(fp_addr - 0x1000, fp_addr + 0x1000)
+            memory.store_bytes(fp_addr, (1).to_bytes(4, "little"))
+            memories.append(memory)
+        # The stub stops in the first instance, so a lookup in the module of the
+        # frame instead of the one of the variable fails for the second.
+        target, process = self.connect_to_modules(
+            modules, [], memory=FakeMemories(memories)
+        )
+
+        for module in modules:
+            image = target.FindModule(lldb.SBFileSpec(module.name))
+            fp = image.FindFirstGlobalVariable(target, "fp")
+            self.assertEqual(fp.GetValueAsUnsigned(), 1)
+            callee = image.FindFunctions("callee")[0].GetFunction()
+            callee_addr = callee.GetStartAddress().GetLoadAddress(target)
+            self.assertEqual(
+                fp.GetSummary(), "(actual=0x%x %s`callee)" % (callee_addr, module.name)
+            )
 
     @skipIfAsan
     @skipIfXmlSupportMissing

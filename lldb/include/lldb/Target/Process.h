@@ -1521,6 +1521,20 @@ public:
   virtual CFAComparison CompareCFAs(const StackID &lhs, const StackID &rhs) {
     return CFAComparison::NoOpinion;
   }
+  /// Returns the address of the code that a function pointer value calls.
+  ///
+  /// On most targets a function pointer holds that address, with any extra
+  /// bits that FixCodeAddress removes. On WebAssembly it holds an index into a
+  /// table of functions, and each module instance, which LLDB loads as a
+  /// module of its own, has a table of its own.
+  ///
+  /// \param[in] calling_module
+  ///     The module whose code would call the function, or nullptr if unknown.
+  virtual llvm::Expected<lldb::addr_t>
+  ResolveFunctionPointer(lldb::addr_t function_pointer,
+                         Module *calling_module = nullptr) {
+    return function_pointer;
+  }
 
   /// Get the Modification ID of the process.
   ///

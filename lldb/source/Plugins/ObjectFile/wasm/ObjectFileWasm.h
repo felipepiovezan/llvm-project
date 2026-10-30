@@ -33,6 +33,18 @@ struct WasmGlobal {
   std::optional<uint64_t> init_expr_value;
 };
 
+/// An active element segment of table 0, which puts functions into the table
+/// when the module is instantiated.
+struct WasmElementSegment {
+  /// First table index the segment fills. Absent when the offset has to be
+  /// evaluated against module state, as in position-independent code.
+  std::optional<uint64_t> offset;
+
+  /// Function index for each table index from `offset`, or nothing for a null
+  /// reference.
+  std::vector<std::optional<uint32_t>> functions;
+};
+
 /// Generic Wasm object file reader.
 ///
 /// This class provides a generic wasm32 reader plugin implementing the
@@ -133,6 +145,14 @@ public:
   /// information for this module.
   std::optional<FileSpec> GetExternalDebugInfoFileSpec();
 
+  /// Returns the function that the element segments put at \p index of table
+  /// 0 when the module is instantiated. A function pointer is an index into
+  /// that table.
+  ///
+  /// The result describes the table at instantiation: a module that changes
+  /// its table later, with table.set for example, can hold another function.
+  llvm::Expected<Address> GetFunctionAtTableIndex(uint64_t index);
+
 private:
   ObjectFileWasm(const lldb::ModuleSP &module_sp,
                  lldb::DataExtractorSP extractor_sp, lldb::offset_t data_offset,
@@ -172,6 +192,9 @@ private:
   uint32_t m_num_imported_functions = 0;
   uint32_t m_num_imported_globals = 0;
   std::vector<WasmGlobal> m_globals;
+  /// Offset of each defined function in the code section.
+  std::vector<lldb::offset_t> m_function_offsets;
+  std::vector<WasmElementSegment> m_element_segments;
   std::vector<Symbol> m_symbols;
   ArchSpec m_arch;
   UUID m_uuid;

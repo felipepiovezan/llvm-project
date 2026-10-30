@@ -19,6 +19,7 @@
 #include "lldb/Utility/Log.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -26,6 +27,7 @@
 #include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/ErrorExtras.h"
 #include "llvm/Support/Format.h"
 #include <cstring>
 #include <optional>
@@ -630,6 +632,158 @@ ParseGlobals(DataExtractor &data) {
   return globals;
 }
 
+/// Skip a reference type, which is one byte unless it names a heap type.
+static void SkipRefType(llvm::DataExtractor &data,
+                        llvm::DataExtractor::Cursor &c) {
+  const uint8_t type = data.getU8(c);
+  if (type == llvm::wasm::WASM_TYPE_NULLABLE ||
+      type == llvm::wasm::WASM_TYPE_NONNULLABLE)
+    data.getSLEB128(c); // heap type
+}
+
+/// Parse the offset of an active element segment. Only a lone constant has a
+/// static value: position-independent code computes the offset from an
+/// imported global.
+static llvm::Expected<std::optional<uint64_t>>
+ParseElementOffset(llvm::DataExtractor &data, llvm::DataExtractor::Cursor &c) {
+  std::optional<uint64_t> constant;
+  unsigned num_instructions = 0;
+  for (;;) {
+    const uint8_t opcode = data.getU8(c);
+    if (!c)
+      return c.takeError();
+    if (opcode == llvm::wasm::WASM_OPCODE_END)
+      break;
+    ++num_instructions;
+    switch (opcode) {
+    case llvm::wasm::WASM_OPCODE_I32_CONST:
+      constant = static_cast<uint32_t>(data.getSLEB128(c));
+      break;
+    case llvm::wasm::WASM_OPCODE_I64_CONST:
+      constant = static_cast<uint64_t>(data.getSLEB128(c));
+      break;
+    case llvm::wasm::WASM_OPCODE_GLOBAL_GET:
+      data.getULEB128(c);
+      break;
+    case llvm::wasm::WASM_OPCODE_I32_ADD:
+    case llvm::wasm::WASM_OPCODE_I32_SUB:
+    case llvm::wasm::WASM_OPCODE_I32_MUL:
+    case llvm::wasm::WASM_OPCODE_I64_ADD:
+    case llvm::wasm::WASM_OPCODE_I64_SUB:
+    case llvm::wasm::WASM_OPCODE_I64_MUL:
+      break;
+    default:
+      return llvm::createStringErrorV("unsupported element offset opcode {0}",
+                                      opcode);
+    }
+  }
+  if (num_instructions != 1)
+    return std::nullopt;
+  return constant;
+}
+
+/// Parse an element expression, which gives the function of one table index.
+static llvm::Expected<std::optional<uint32_t>>
+ParseElementExpr(llvm::DataExtractor &data, llvm::DataExtractor::Cursor &c) {
+  std::optional<uint32_t> function;
+  const uint8_t opcode = data.getU8(c);
+  if (!c)
+    return c.takeError();
+  switch (opcode) {
+  case llvm::wasm::WASM_OPCODE_REF_FUNC: {
+    llvm::Expected<uint32_t> index = GetULEB32(data, c);
+    if (!index)
+      return index.takeError();
+    function = *index;
+    break;
+  }
+  case llvm::wasm::WASM_OPCODE_REF_NULL:
+    data.getSLEB128(c); // heap type
+    break;
+  default:
+    return llvm::createStringErrorV("unsupported element expression opcode {0}",
+                                    opcode);
+  }
+  const uint8_t end = data.getU8(c);
+  if (!c)
+    return c.takeError();
+  if (end != llvm::wasm::WASM_OPCODE_END)
+    return llvm::createStringErrorV("element expression has no end");
+  return function;
+}
+
+/// Parse the element segments that put functions into table 0 when the module
+/// is instantiated. Passive and declarative segments, and those of other
+/// tables, put nothing there at instantiation and are skipped.
+static llvm::Expected<std::vector<WasmElementSegment>>
+ParseElements(DataExtractor &elem_data) {
+  llvm::DataExtractor data = elem_data.GetAsLLVM();
+  llvm::DataExtractor::Cursor c(0);
+
+  llvm::Expected<uint32_t> count = GetULEB32(data, c);
+  if (!count)
+    return count.takeError();
+
+  std::vector<WasmElementSegment> segments;
+  for (uint32_t i = 0; i < *count; ++i) {
+    llvm::Expected<uint32_t> flags = GetULEB32(data, c);
+    if (!flags)
+      return flags.takeError();
+    if (*flags > 7)
+      return llvm::createStringErrorV("unknown element segment flags {0}",
+                                      *flags);
+
+    const bool active = !(*flags & llvm::wasm::WASM_ELEM_SEGMENT_IS_PASSIVE);
+    uint32_t table = 0;
+    WasmElementSegment segment;
+    if (active) {
+      if (*flags & llvm::wasm::WASM_ELEM_SEGMENT_HAS_TABLE_NUMBER) {
+        llvm::Expected<uint32_t> table_number = GetULEB32(data, c);
+        if (!table_number)
+          return table_number.takeError();
+        table = *table_number;
+      }
+      llvm::Expected<std::optional<uint64_t>> offset =
+          ParseElementOffset(data, c);
+      if (!offset)
+        return offset.takeError();
+      segment.offset = *offset;
+    }
+
+    const bool has_exprs =
+        *flags & llvm::wasm::WASM_ELEM_SEGMENT_HAS_INIT_EXPRS;
+    if (*flags & llvm::wasm::WASM_ELEM_SEGMENT_MASK_HAS_ELEM_DESC) {
+      if (has_exprs)
+        SkipRefType(data, c);
+      else
+        data.getU8(c); // element kind
+    }
+
+    llvm::Expected<uint32_t> num_elements = GetULEB32(data, c);
+    if (!num_elements)
+      return num_elements.takeError();
+    for (uint32_t j = 0; j < *num_elements; ++j) {
+      if (!has_exprs) {
+        llvm::Expected<uint32_t> function = GetULEB32(data, c);
+        if (!function)
+          return function.takeError();
+        segment.functions.push_back(*function);
+        continue;
+      }
+      llvm::Expected<std::optional<uint32_t>> function =
+          ParseElementExpr(data, c);
+      if (!function)
+        return function.takeError();
+      segment.functions.push_back(*function);
+    }
+
+    if (active && table == 0)
+      segments.push_back(std::move(segment));
+  }
+
+  return segments;
+}
+
 static llvm::Expected<std::vector<Symbol>>
 ParseNames(SectionSP code_section_sp, SectionSP global_section_sp,
            DataExtractor &name_data, const std::vector<WasmFunction> &functions,
@@ -1108,8 +1262,9 @@ void ObjectFileWasm::CreateSections(SectionList &unified_section_list) {
     }
   }
 
-  // The global index of an export counts imported globals, so it can be mapped
-  // to a global of this module only if the import section parsed.
+  // The global index of an export and the function index of an element count
+  // imports, so they can be mapped to this module only if the import section
+  // parsed.
   if (!imports_parsed)
     return;
 
@@ -1123,6 +1278,21 @@ void ObjectFileWasm::CreateSections(SectionList &unified_section_list) {
     } else {
       AddExportedDataSymbols(*exports, m_globals, m_num_imported_globals,
                              global_section_sp, memory_sections, m_symbols);
+    }
+  }
+
+  if (std::optional<section_info> info =
+          GetSectionInfo(llvm::wasm::WASM_SEC_ELEM)) {
+    DataExtractor elem_data = ReadImageData(info->offset, info->size);
+    llvm::Expected<std::vector<WasmElementSegment>> elements =
+        ParseElements(elem_data);
+    if (!elements) {
+      LLDB_LOG_ERROR(log, elements.takeError(),
+                     "Failed to parse Wasm element section: {0}");
+    } else {
+      m_element_segments = std::move(*elements);
+      for (const WasmFunction &function : functions)
+        m_function_offsets.push_back(function.section_offset);
     }
   }
 }
@@ -1300,6 +1470,45 @@ std::optional<FileSpec> ObjectFileWasm::GetExternalDebugInfoFileSpec() {
     }
   }
   return std::nullopt;
+}
+
+llvm::Expected<Address>
+ObjectFileWasm::GetFunctionAtTableIndex(uint64_t index) {
+  SectionList *sections = GetSectionList();
+  SectionSP code_section_sp =
+      sections ? sections->FindSectionByType(eSectionTypeCode, false)
+               : SectionSP();
+  if (!code_section_sp)
+    return llvm::createStringErrorV("the module has no code section");
+
+  // Instantiation applies the segments in order, so a later one wins.
+  for (const WasmElementSegment &segment : llvm::reverse(m_element_segments)) {
+    if (!segment.offset)
+      return llvm::createStringErrorV(
+          "the module puts functions into its table at an offset that depends "
+          "on module state");
+    if (index < *segment.offset ||
+        index - *segment.offset >= segment.functions.size())
+      continue;
+
+    std::optional<uint32_t> function =
+        segment.functions[index - *segment.offset];
+    if (!function)
+      return llvm::createStringErrorV("table index {0:x} holds no function",
+                                      index);
+    if (*function < m_num_imported_functions)
+      return llvm::createStringErrorV(
+          "table index {0:x} holds imported function {1}", index, *function);
+    const uint32_t defined = *function - m_num_imported_functions;
+    if (defined >= m_function_offsets.size())
+      return llvm::createStringErrorV(
+          "table index {0:x} holds function {1}, which has no code", index,
+          *function);
+    return Address(code_section_sp, m_function_offsets[defined]);
+  }
+
+  return llvm::createStringErrorV(
+      "the module puts no function at table index {0:x}", index);
 }
 
 void ObjectFileWasm::Dump(Stream *s) {

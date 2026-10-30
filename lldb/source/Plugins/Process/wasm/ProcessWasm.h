@@ -43,6 +43,14 @@ public:
   bool CanDebug(lldb::TargetSP target_sp,
                 bool plugin_specified_by_name) override;
 
+  /// Looks the table index up in the element section of \a calling_module, as
+  /// call_indirect looks it up in a table of the instance that runs it. An
+  /// index alone does not say which table it belongs to, so this fails without
+  /// a calling module.
+  llvm::Expected<lldb::addr_t>
+  ResolveFunctionPointer(lldb::addr_t function_pointer,
+                         Module *calling_module) override;
+
   /// Retrieve the current call stack from the WebAssembly remote process.
   llvm::Expected<std::vector<lldb::addr_t>> GetWasmCallStack(lldb::tid_t tid);
 

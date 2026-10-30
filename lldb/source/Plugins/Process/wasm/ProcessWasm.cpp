@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ProcessWasm.h"
+#include "Plugins/ObjectFile/wasm/ObjectFileWasm.h"
 #include "ThreadWasm.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
@@ -77,6 +78,32 @@ bool ProcessWasm::CanDebug(lldb::TargetSP target_sp,
   // However, if there is no wasm module, we return false, otherwise,
   // we might use ProcessWasm to attach gdb remote.
   return false;
+}
+
+llvm::Expected<lldb::addr_t>
+ProcessWasm::ResolveFunctionPointer(lldb::addr_t function_pointer,
+                                    Module *calling_module) {
+  if (!calling_module)
+    return llvm::createStringErrorV(
+        "no calling module to resolve function pointer {0:x}",
+        function_pointer);
+  if (wasm_addr_t(function_pointer).GetType() == WasmAddressType::Object)
+    return function_pointer;
+
+  auto *object_file =
+      llvm::dyn_cast_or_null<ObjectFileWasm>(calling_module->GetObjectFile());
+  if (!object_file)
+    return llvm::createStringErrorV("{0} is not a WebAssembly module",
+                                    calling_module->GetFileSpec());
+  llvm::Expected<Address> function =
+      object_file->GetFunctionAtTableIndex(function_pointer);
+  if (!function)
+    return function.takeError();
+  const lldb::addr_t load_address = function->GetLoadAddress(&GetTarget());
+  if (load_address == LLDB_INVALID_ADDRESS)
+    return llvm::createStringErrorV("{0} is not loaded",
+                                    calling_module->GetFileSpec());
+  return load_address;
 }
 
 std::shared_ptr<ThreadGDBRemote> ProcessWasm::CreateThread(lldb::tid_t tid) {

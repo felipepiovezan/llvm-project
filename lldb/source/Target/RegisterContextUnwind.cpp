@@ -2153,12 +2153,13 @@ bool RegisterContextUnwind::ReadFrameAddress(
     if (ReadGPRValue(regnum_to_deref, reg_to_deref_contents)) {
       const RegisterInfo *reg_info =
           GetRegisterInfoAtIndex(regnum_to_deref.GetAsKind(eRegisterKindLLDB));
-      RegisterValue reg_value;
       if (reg_info) {
-        Status error = ReadRegisterValueFromMemory(
-            reg_info, reg_to_deref_contents, reg_info->byte_size, reg_value);
-        if (error.Success()) {
-          address = reg_value.GetAsUInt64();
+        // Read an address, not a register: the register can be wider than an
+        // address, and a Wasm local has no fixed size.
+        llvm::Expected<addr_t> deref_contents =
+            m_thread.GetProcess()->ReadPointerFromMemory(reg_to_deref_contents);
+        if (deref_contents) {
+          address = *deref_contents;
           UNWIND_LOG(log,
                      "CFA value via dereferencing reg {0} ({1}): reg has val "
                      "{2:x}, CFA value is {3:x}",
@@ -2167,6 +2168,7 @@ bool RegisterContextUnwind::ReadFrameAddress(
                      reg_to_deref_contents, address);
           return true;
         } else {
+          llvm::consumeError(deref_contents.takeError());
           UNWIND_LOG(
               log,
               "Tried to deref reg {0} ({1}) [{2:x}] but memory read failed.",

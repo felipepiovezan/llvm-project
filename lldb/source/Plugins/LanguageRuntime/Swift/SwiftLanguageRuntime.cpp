@@ -3739,6 +3739,14 @@ GetFrameSetupInfo(const UnwindPlan &unwind_plan, RegisterContext &regctx) {
 static llvm::Expected<addr_t> ReadAsyncContextRegisterFromUnwind(
     SymbolContext &sc, Process &process, Address pc, Address func_start_addr,
     RegisterContext &regctx, AsyncUnwindRegisterNumbers regnums) {
+  // Every frame has its own local 0, so no stack slot keeps a copy.
+  if (process.GetTarget().GetArchitecture().GetTriple().isWasm()) {
+    const addr_t async_reg = SwiftLanguageRuntime::GetAsyncContext(&regctx);
+    if (async_reg == LLDB_INVALID_ADDRESS)
+      return llvm::createStringErrorV("could not read local 0");
+    return async_reg;
+  }
+
   llvm::Expected<std::shared_ptr<const UnwindPlan>> unwind_plan =
       GetAsmUnwindPlan(pc, sc, regctx.GetThread());
   if (!unwind_plan)
@@ -3878,6 +3886,23 @@ static llvm::Expected<bool> IsIndirectContext(Process &process,
   return prologue_range.ContainsLoadAddress(pc, &process.GetTarget());
 }
 
+/// Returns true if \p regctx describes a frame of the AsyncContext chain, which
+/// knows only the PC and the async register: the fp reg can't be fetched.
+static bool IsAsyncContextChainFrame(RegisterContext &regctx,
+                                     Process &process) {
+  if (!process.GetTarget().GetArchitecture().GetTriple().isWasm())
+    return regctx.GetFP(LLDB_INVALID_ADDRESS) == LLDB_INVALID_ADDRESS;
+
+  // WebAssembly has no fp reg. There, UnwindLLDB makes callers only through
+  // the AsyncContext chain, and a ThreadTask is not in the thread list.
+  if (regctx.GetConcreteFrameIndex() != 0)
+    return true;
+  Thread &thread = regctx.GetThread();
+  ThreadSP listed_thread = process.GetThreadList().FindThreadByID(
+      thread.GetID(), /*can_update=*/false);
+  return listed_thread.get() != &thread;
+}
+
 // Examine the register state and detect the transition from a real
 // stack frame to an AsyncContext frame, or a frame in the middle of
 // the AsyncContext chain, and return an UnwindPlan for these situations.
@@ -3898,11 +3923,9 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   if (!regnums)
     return UnwindPlanSP();
 
-  // If we can't fetch the fp reg, and we *can* fetch the async
-  // context register, then we're in the middle of the AsyncContext
-  // chain, return an UnwindPlan for that.
-  addr_t fp = regctx->GetFP(LLDB_INVALID_ADDRESS);
-  if (fp == LLDB_INVALID_ADDRESS) {
+  // In the middle of the AsyncContext chain, return an UnwindPlan for that if
+  // the async context register can be fetched.
+  if (IsAsyncContextChainFrame(*regctx, *process_sp)) {
     if (GetAsyncContext(regctx) != LLDB_INVALID_ADDRESS)
       return GetFollowAsyncContextUnwindPlan(process_sp, regctx, arch,
                                              behaves_like_zeroth_frame);

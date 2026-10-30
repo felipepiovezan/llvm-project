@@ -9,8 +9,12 @@
 #include "lldb/DataFormatters/CXXFunctionPointer.h"
 
 #include "lldb/Target/ABI.h"
+#include "lldb/Target/Process.h"
 #include "lldb/Target/SectionLoadList.h"
+#include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/LLDBLog.h"
+#include "lldb/Utility/Log.h"
 #include "lldb/Utility/Stream.h"
 #include "lldb/ValueObject/ValueObject.h"
 #include "lldb/lldb-enumerations.h"
@@ -38,6 +42,26 @@ bool lldb_private::formatters::CXXFunctionPointerSummaryProvider(
       Address so_addr;
       Target *target = exe_ctx.GetTargetPtr();
       if (target && target->HasLoadedSections()) {
+        if (Process *process = exe_ctx.GetProcessPtr()) {
+          ModuleSP calling_module = valobj.GetModule();
+          if (!calling_module)
+            if (StackFrame *frame = exe_ctx.GetFramePtr())
+              calling_module =
+                  frame->GetSymbolContext(eSymbolContextModule).module_sp;
+          llvm::Expected<addr_t> code_addr = process->ResolveFunctionPointer(
+              func_ptr_address, calling_module.get());
+          if (!code_addr) {
+            LLDB_LOG_ERROR(GetLog(LLDBLog::DataFormatters),
+                           code_addr.takeError(), "{0}");
+            break;
+          }
+          if (*code_addr != func_ptr_address) {
+            int addrsize = target->GetArchitecture().GetAddressByteSize();
+            sstr.Printf("actual=0x%*.*" PRIx64 " ", addrsize * 2, addrsize * 2,
+                        *code_addr);
+            func_ptr_address = *code_addr;
+          }
+        }
         target->ResolveLoadAddress(func_ptr_address, so_addr);
         if (so_addr.GetSection() == nullptr) {
           // If we have an address that doesn't correspond to any symbol,

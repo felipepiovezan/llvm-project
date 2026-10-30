@@ -2680,9 +2680,21 @@ static ThreadSP FindThreadForTask(ExecutionContext &exe_ctx,
 
   // There should always be frame information for Tasks that are not running. If
   // not, fallback to runJob.
-  lldb::addr_t frame_zero_pc = task_info.asyncBacktracePcs.empty()
-                                   ? task_info.runJob
-                                   : task_info.asyncBacktracePcs[0];
+  lldb::addr_t frame_zero_fn_ptr = task_info.asyncBacktracePcs.empty()
+                                       ? task_info.runJob
+                                       : task_info.asyncBacktracePcs[0];
+  lldb::addr_t frame_zero_pc = LLDB_INVALID_ADDRESS;
+  // Best guess for the module whose executor resumes the task.
+  ModuleSP calling_module;
+  if (StackFrame *frame = exe_ctx.GetFramePtr())
+    calling_module = frame->GetSymbolContext(eSymbolContextModule).module_sp;
+  if (llvm::Expected<lldb::addr_t> pc =
+          exe_ctx.GetProcessRef().ResolveFunctionPointer(frame_zero_fn_ptr,
+                                                         calling_module.get()))
+    frame_zero_pc = *pc;
+  else
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Unwind), pc.takeError(),
+                   "could not find the PC of task {1:x}: {0}", task_info.id);
 
   return std::make_shared<ThreadTask>(
       task_info.id, task_info.resumeAsyncContext, frame_zero_pc, exe_ctx);
@@ -3952,8 +3964,8 @@ SwiftLanguageRuntime::GetRuntimeUnwindPlan(ProcessSP process_sp,
   row.SetRegisterLocationToIsConstant(regnums->async_ctx_regnum, *async_ctx,
                                       /*can_replace=*/false);
 
-  if (std::optional<addr_t> pc_after_prologue =
-          TrySkipVirtualParentProlog(*async_ctx, *process_sp))
+  if (std::optional<addr_t> pc_after_prologue = TrySkipVirtualParentProlog(
+          *async_ctx, *process_sp, pc.GetModule().get()))
     row.SetRegisterLocationToIsConstant(regnums->pc_regnum, *pc_after_prologue,
                                         false);
   else
@@ -3990,9 +4002,12 @@ UnwindPlanSP SwiftLanguageRuntime::GetFollowAsyncContextUnwindPlan(
   row.SetRegisterLocationToIsCFAPlusOffset(regnums->async_ctx_regnum,
                                            /*offset*/ 0, false);
 
+  Address pc;
+  pc.SetLoadAddress(regctx->GetPC(), &process_sp->GetTarget());
   const unsigned num_indirections = 1;
-  if (std::optional<addr_t> pc_after_prologue = TrySkipVirtualParentProlog(
-          GetAsyncContext(regctx), *process_sp, num_indirections))
+  if (std::optional<addr_t> pc_after_prologue =
+          TrySkipVirtualParentProlog(GetAsyncContext(regctx), *process_sp,
+                                     pc.GetModule().get(), num_indirections))
     row.SetRegisterLocationToIsConstant(regnums->pc_regnum, *pc_after_prologue,
                                         false);
   else
@@ -4014,7 +4029,8 @@ UnwindPlanSP SwiftLanguageRuntime::GetFollowAsyncContextUnwindPlan(
 }
 
 std::optional<lldb::addr_t> SwiftLanguageRuntime::TrySkipVirtualParentProlog(
-    lldb::addr_t async_reg_val, Process &process, unsigned num_indirections) {
+    lldb::addr_t async_reg_val, Process &process, Module *calling_module,
+    unsigned num_indirections) {
   assert(num_indirections <= 2 &&
          "more than two dereferences should not be needed");
   if (async_reg_val == LLDB_INVALID_ADDRESS || async_reg_val == 0)
@@ -4044,7 +4060,14 @@ std::optional<lldb::addr_t> SwiftLanguageRuntime::TrySkipVirtualParentProlog(
     llvm::consumeError(pc_value_or_err.takeError());
     return {};
   }
-  addr_t pc_value = *pc_value_or_err;
+  llvm::Expected<addr_t> resolved_pc_or_err =
+      process.ResolveFunctionPointer(*pc_value_or_err, calling_module);
+  if (!resolved_pc_or_err) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Unwind), resolved_pc_or_err.takeError(),
+                   "{1}::{0}", __FUNCTION__);
+    return {};
+  }
+  addr_t pc_value = *resolved_pc_or_err;
 
   llvm::Expected<uint64_t> maybe_prologue_size =
       FindPrologueSize(process, pc_value);

@@ -397,15 +397,25 @@ static ThunkAction GetThunkAction(ThunkKind kind) {
 static ThreadPlanSP
 CreateRunThroughTaskSwitchThreadPlan(Thread &thread,
                                      unsigned resume_fn_generic_regnum) {
-  RegisterContextSP reg_ctx =
-      thread.GetStackFrameAtIndex(0)->GetRegisterContext();
+  StackFrameSP frame = thread.GetStackFrameAtIndex(0);
+  RegisterContextSP reg_ctx = frame->GetRegisterContext();
   unsigned resume_fn_reg = reg_ctx->ConvertRegisterKindToRegisterNumber(
       RegisterKind::eRegisterKindGeneric, resume_fn_generic_regnum);
   uint64_t resume_fn_ptr = reg_ctx->ReadRegisterAsUnsigned(resume_fn_reg, 0);
   if (!resume_fn_ptr)
     return {};
 
-  resume_fn_ptr = thread.GetProcess()->FixCodeAddress(resume_fn_ptr);
+  ModuleSP calling_module =
+      frame->GetSymbolContext(eSymbolContextModule).module_sp;
+  llvm::Expected<lldb::addr_t> resume_fn_addr =
+      thread.GetProcess()->ResolveFunctionPointer(resume_fn_ptr,
+                                                  calling_module.get());
+  if (!resume_fn_addr) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Step), resume_fn_addr.takeError(),
+                   "{1}::{0}", __FUNCTION__);
+    return {};
+  }
+  resume_fn_ptr = thread.GetProcess()->FixCodeAddress(*resume_fn_addr);
 
   llvm::Expected<uint64_t> maybe_prologue_size =
       FindPrologueSize(*thread.GetProcess(), resume_fn_ptr);

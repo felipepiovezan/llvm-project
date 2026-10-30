@@ -856,9 +856,11 @@ protected:
 
   /// Given the async register of a funclet, extract its continuation pointer,
   /// compute the prologue size of the continuation function, and return the
-  /// address of the first non-prologue instruction.
+  /// address of the first non-prologue instruction. \a calling_module is the
+  /// module of the funclet, whose code calls the continuation.
   std::optional<lldb::addr_t>
   TrySkipVirtualParentProlog(lldb::addr_t async_reg_val, Process &process,
+                             Module *calling_module,
                              unsigned num_indirections = 0);
 
   const CompilerType &GetBoxMetadataType();

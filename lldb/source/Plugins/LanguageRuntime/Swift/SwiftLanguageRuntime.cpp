@@ -2669,15 +2669,9 @@ static ThreadSP FindThreadRunningTask(Process &process,
   return process.GetThreadList().FindThreadByID(tid, /*can_update=*/false);
 }
 
-/// Finds the Thread that is currently running a task, otherwise creates a
-/// ThreadTask for it.
-static ThreadSP FindThreadForTask(ExecutionContext &exe_ctx,
-                                  const TaskInfo &task_info) {
-  // For running tasks, TaskInfo won't have frame information, but LLDB should.
-  if (ThreadSP thread =
-          FindThreadRunningTask(exe_ctx.GetProcessRef(), task_info))
-    return thread;
-
+/// Creates a ThreadTask whose frame 0 is where the task resumes.
+static ThreadSP CreateThreadTask(ExecutionContext &exe_ctx,
+                                 const TaskInfo &task_info) {
   // There should always be frame information for Tasks that are not running. If
   // not, fallback to runJob.
   lldb::addr_t frame_zero_fn_ptr = task_info.asyncBacktracePcs.empty()
@@ -2698,6 +2692,18 @@ static ThreadSP FindThreadForTask(ExecutionContext &exe_ctx,
 
   return std::make_shared<ThreadTask>(
       task_info.id, task_info.resumeAsyncContext, frame_zero_pc, exe_ctx);
+}
+
+/// Finds the Thread that is currently running a task, otherwise creates a
+/// ThreadTask for it.
+static ThreadSP FindThreadForTask(ExecutionContext &exe_ctx,
+                                  const TaskInfo &task_info) {
+  // For running tasks, TaskInfo won't have frame information, but LLDB should.
+  if (ThreadSP thread =
+          FindThreadRunningTask(exe_ctx.GetProcessRef(), task_info))
+    return thread;
+
+  return CreateThreadTask(exe_ctx, task_info);
 }
 
 /// Prints all the frames in the backtrace of the task represented by task_info.
@@ -3091,9 +3097,7 @@ ThreadForLiveTaskArgument(Args &command, ExecutionContext &exe_ctx) {
               FindThreadRunningTask(exe_ctx.GetProcessRef(), *task_info))
         return thread;
 
-      return std::make_shared<ThreadTask>(task_info->id,
-                                          task_info->resumeAsyncContext,
-                                          task_info->runJob, exe_ctx);
+      return CreateThreadTask(exe_ctx, *task_info);
     }
 
   return llvm::createStringError("failed to access Task data from runtime");
@@ -3894,13 +3898,12 @@ static bool IsAsyncContextChainFrame(RegisterContext &regctx,
     return regctx.GetFP(LLDB_INVALID_ADDRESS) == LLDB_INVALID_ADDRESS;
 
   // WebAssembly has no fp reg. There, UnwindLLDB makes callers only through
-  // the AsyncContext chain, and a ThreadTask is not in the thread list.
+  // the AsyncContext chain, and frame 0 is live only on a thread that a real
+  // thread backs, as the OS plugin does for a running task. Nothing backs a
+  // ThreadTask, even one that `language swift task select` lists.
   if (regctx.GetConcreteFrameIndex() != 0)
     return true;
-  Thread &thread = regctx.GetThread();
-  ThreadSP listed_thread = process.GetThreadList().FindThreadByID(
-      thread.GetID(), /*can_update=*/false);
-  return listed_thread.get() != &thread;
+  return !regctx.GetThread().GetBackingThread();
 }
 
 // Examine the register state and detect the transition from a real

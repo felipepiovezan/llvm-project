@@ -71,6 +71,11 @@ TEST_F(TestSwiftASTContext, SwiftFriendlyTriple) {
   EXPECT_EQ(SwiftASTContext::GetSwiftFriendlyTriple(
                 llvm::Triple("aarch64-unknown-linux")),
             llvm::Triple("aarch64-unknown-linux-gnu"));
+  // Triple::operator== ignores the spelling of an unknown environment.
+  EXPECT_EQ(SwiftASTContext::GetSwiftFriendlyTriple(
+                llvm::Triple("wasm32-unknown-wasip1-unknown"))
+                .str(),
+            "wasm32-unknown-wasip1");
 }
 
 TEST_F(TestSwiftASTContext, ApplyWorkingDir) {

@@ -3910,6 +3910,13 @@ llvm::Triple SwiftASTContext::GetSwiftFriendlyTriple(llvm::Triple triple) {
     // library for the REPL.
     if (triple.isOSWindows() && triple.isWindowsMSVCEnvironment())
       triple.setVendor(llvm::Triple::UnknownVendor);
+
+    // ProcessGDBRemote spells a missing environment as `unknown`, but Swift
+    // looks up WASI modules by the exact triple, which has none.
+    if (triple.isOSWASI() &&
+        triple.getEnvironment() == llvm::Triple::UnknownEnvironment)
+      triple = llvm::Triple(triple.getArchName(), triple.getVendorName(),
+                            triple.getOSName());
     triple.normalize();
     return triple;
   }

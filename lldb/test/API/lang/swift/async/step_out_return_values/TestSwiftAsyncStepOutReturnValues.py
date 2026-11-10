@@ -47,3 +47,19 @@ class TestCase(lldbtest.TestBase):
                 "v_" + function.removeprefix("f_")
             )
             self.assertEqual(returned, describe(variable))
+
+    @swiftTest
+    @skipEmbeddedSwift
+    # FIXME: An async function passes the error to its continuation, but lldb
+    # reads it from the swifterror register.
+    # rdar://192367240
+    @expectedFailureAll
+    def test_known_problems(self):
+        """Test the error thrown by an async function"""
+        self.build()
+        _, _, thread, _ = lldbutil.run_to_source_breakpoint(
+            self, "break in throwing", lldb.SBFileSpec("main.swift")
+        )
+        thread.StepOut()
+        self.assertFalse(thread.GetStopReturnValue().IsValid())
+        self.assertTrue(thread.GetStopErrorValue().IsValid())

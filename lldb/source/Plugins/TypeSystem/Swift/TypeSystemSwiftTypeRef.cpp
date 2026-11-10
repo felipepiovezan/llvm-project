@@ -5861,6 +5861,7 @@ bool TypeSystemSwiftTypeRef::DumpTypeValue(
     case Node::Kind::BuiltinTypeName:
     case Node::Kind::DependentGenericParamType:
     case Node::Kind::FunctionType:
+    case Node::Kind::ThinFunctionType:
     case Node::Kind::NoEscapeFunctionType:
     case Node::Kind::CFunctionPointer:
     case Node::Kind::ObjCBlock:

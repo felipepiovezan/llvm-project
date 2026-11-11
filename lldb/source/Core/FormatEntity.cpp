@@ -1546,7 +1546,7 @@ bool FormatEntity::Formatter::Format(const Entry &entry, Stream &s,
               options.SetUseDynamicType(eDynamicCanRunTarget);
             if (return_valobj_sp->DoesProvideSyntheticValue())
               options.SetUseSyntheticValue(true);
-            if (llvm::Error error = return_valobj_sp->Dump(s)) {
+            if (llvm::Error error = return_valobj_sp->Dump(s, options)) {
               s << "error: " << toString(std::move(error));
               return false;
             }

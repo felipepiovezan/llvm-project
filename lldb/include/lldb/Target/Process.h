@@ -43,6 +43,7 @@
 #include "lldb/Target/MemoryRegionInfoCache.h"
 #include "lldb/Target/MemoryTagManager.h"
 #include "lldb/Target/QueueList.h"
+#include "lldb/Target/StackID.h"
 #include "lldb/Target/ThreadList.h"
 #include "lldb/Target/ThreadPlanStack.h"
 #include "lldb/Target/Trace.h"
@@ -1525,6 +1526,15 @@ public:
   ResolveFunctionPointer(lldb::addr_t function_pointer,
                          Module *calling_module = nullptr) {
     return function_pointer;
+  }
+
+  /// Compares the call frame addresses of two frames.
+  ///
+  /// \return
+  ///     Younger if \p lhs is younger than \p rhs, Older if it is older, and
+  ///     NoOpinion if the process does not order the frames.
+  virtual CFAComparison CompareCFAs(const StackID &lhs, const StackID &rhs) {
+    return CFAComparison::NoOpinion;
   }
 
   /// Get the Modification ID of the process.

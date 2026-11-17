@@ -53,6 +53,8 @@ public:
   ResolveFunctionPointer(lldb::addr_t function_pointer,
                          Module *calling_module) override;
 
+  CFAComparison CompareCFAs(const StackID &lhs, const StackID &rhs) override;
+
   /// Retrieve the current call stack from the WebAssembly remote process.
   llvm::Expected<std::vector<lldb::addr_t>> GetWasmCallStack(lldb::tid_t tid);
 

@@ -1536,6 +1536,15 @@ public:
     return function_pointer;
   }
 
+  /// Compares the call frame addresses of two frames.
+  ///
+  /// \return
+  ///     Younger if \p lhs is younger than \p rhs, Older if it is older, and
+  ///     NoOpinion if the process does not order the frames.
+  virtual CFAComparison CompareCFAs(const StackID &lhs, const StackID &rhs) {
+    return CFAComparison::NoOpinion;
+  }
+
   /// Get the Modification ID of the process.
   ///
   /// \return

@@ -4885,8 +4885,10 @@ llvm::Expected<uint64_t> FindPrologueSize(Process &process,
     return llvm::createStringError(llvm::formatv(
         "Failed to find a symbol context for address {0:x}", load_address));
 
-  uint64_t prologue_size = sc.symbol ? sc.symbol->GetPrologueByteSize()
-                                     : sc.function->GetPrologueByteSize();
+  // A symbol takes its prologue from its function, except on WebAssembly,
+  // where ObjectFileWasm sets it to the local declarations.
+  uint64_t prologue_size = sc.function ? sc.function->GetPrologueByteSize()
+                                       : sc.symbol->GetPrologueByteSize();
 
   if (prologue_size == 0)
     return llvm::createStringError(llvm::formatv(

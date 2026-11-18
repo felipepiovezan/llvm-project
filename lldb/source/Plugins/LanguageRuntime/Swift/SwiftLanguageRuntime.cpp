@@ -4104,18 +4104,18 @@ static llvm::Expected<bool> IsReachableParent(lldb::addr_t source,
 CFAComparison SwiftLanguageRuntime::CompareHeapCFAs(const StackID &lhs,
                                                     const StackID &rhs,
                                                     Process &process) {
-  const bool lhs_cfa_on_stack = lhs.IsCFAOnStack(process);
-  const bool rhs_cfa_on_stack = rhs.IsCFAOnStack(process);
-  if (lhs_cfa_on_stack && rhs_cfa_on_stack)
+  const bool lhs_cfa_is_async_ctx = !lhs.IsCFAOnStack(process);
+  const bool rhs_cfa_is_async_ctx = !rhs.IsCFAOnStack(process);
+  if (!lhs_cfa_is_async_ctx && !rhs_cfa_is_async_ctx)
     return CFAComparison::NoOpinion;
 
-  // If one of the frames has a CFA on the stack and the other doesn't, we are
-  // at the boundary between an asynchronous and a synchronous function.
+  // If only one of the CFAs is an async context, the frames are at the
+  // boundary between an asynchronous and a synchronous function.
   // Synchronous functions cannot call asynchronous functions, therefore the
   // synchronous frame is always younger.
-  if (lhs_cfa_on_stack && !rhs_cfa_on_stack)
+  if (!lhs_cfa_is_async_ctx && rhs_cfa_is_async_ctx)
     return CFAComparison::Younger;
-  if (!lhs_cfa_on_stack && rhs_cfa_on_stack)
+  if (lhs_cfa_is_async_ctx && !rhs_cfa_is_async_ctx)
     return CFAComparison::Older;
 
   const lldb::addr_t lhs_cfa = lhs.GetCallFrameAddressWithoutMetadata();

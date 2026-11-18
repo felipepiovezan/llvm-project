@@ -32,6 +32,7 @@
 #include "Plugins/Language/Swift/SwiftMangled.h"
 #include "Plugins/Process/Utility/RegisterContext_x86.h"
 #include "Utility/ARM64_DWARF_Registers.h"
+#include "Utility/WasmVirtualRegisters.h"
 #include "swift/Demangling/ManglingFlavor.h"
 #include "llvm/ADT/SmallSet.h"
 
@@ -399,8 +400,14 @@ CreateRunThroughTaskSwitchThreadPlan(Thread &thread,
                                      unsigned resume_fn_generic_regnum) {
   StackFrameSP frame = thread.GetStackFrameAtIndex(0);
   RegisterContextSP reg_ctx = frame->GetRegisterContext();
-  unsigned resume_fn_reg = reg_ctx->ConvertRegisterKindToRegisterNumber(
-      RegisterKind::eRegisterKindGeneric, resume_fn_generic_regnum);
+  // WebAssembly has no registers, and passes the async context in local 0, so
+  // argument N is in local N.
+  unsigned resume_fn_reg =
+      thread.CalculateTarget()->GetArchitecture().GetTriple().isWasm()
+          ? GetWasmRegister(eWasmTagLocal, resume_fn_generic_regnum -
+                                               LLDB_REGNUM_GENERIC_ARG1 + 1)
+          : reg_ctx->ConvertRegisterKindToRegisterNumber(
+                RegisterKind::eRegisterKindGeneric, resume_fn_generic_regnum);
   uint64_t resume_fn_ptr = reg_ctx->ReadRegisterAsUnsigned(resume_fn_reg, 0);
   if (!resume_fn_ptr)
     return {};
@@ -550,8 +557,13 @@ static lldb::ThreadPlanSP GetStepThroughTrampolinePlan(Thread &thread,
 
   // Only do this if you are at the beginning of the thunk function:
   lldb::addr_t cur_addr = thread.GetRegisterContext()->GetPC();
+  Address symbol_start = symbol->GetAddress();
+  // ObjectFileWasm records the local declarations, which are not instructions,
+  // as the prologue.
+  if (thread.CalculateTarget()->GetArchitecture().GetTriple().isWasm())
+    symbol_start.Slide(symbol->GetPrologueByteSize());
   lldb::addr_t symbol_addr =
-      symbol->GetAddress().GetLoadAddress(&thread.GetProcess()->GetTarget());
+      symbol_start.GetLoadAddress(&thread.GetProcess()->GetTarget());
 
   if (symbol_addr != cur_addr)
     return nullptr;

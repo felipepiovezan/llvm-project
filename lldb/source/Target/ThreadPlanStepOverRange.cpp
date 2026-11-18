@@ -181,7 +181,10 @@ bool ThreadPlanStepOverRange::ShouldStop(Event *event_ptr) {
       StackFrameSP older_frame_sp = thread.GetStackFrameAtIndex(i);
       if (!older_frame_sp) {
         // We can't unwind the next frame we should just get out of here &
-        // stop...
+        // stop... unless a trampoline knows where execution continues.
+        if (i == 1)
+          new_plan_sp = thread.QueueThreadPlanForStepThrough(
+              m_stack_id, false, stop_others, m_status);
         break;
       }
 

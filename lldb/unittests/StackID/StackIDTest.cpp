@@ -1,6 +1,7 @@
 
 #include "lldb/Target/StackID.h"
 #include "Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.h"
+#include "Plugins/ObjectFile/wasm/WasmAddress.h"
 #include "Plugins/Platform/MacOSX/PlatformMacOSX.h"
 #include "Plugins/Platform/MacOSX/PlatformRemoteMacOSX.h"
 #include "lldb/Core/Debugger.h"
@@ -52,9 +53,9 @@ struct MockProcess : Process {
                       size_t size, Status &error) override {
     addr_t vm_addr = process_addr.GetValue();
     assert(memory_map.contains(vm_addr));
-    assert(size == sizeof(addr_t));
-    *reinterpret_cast<addr_t *>(buf) = memory_map[vm_addr];
-    return sizeof(addr_t);
+    assert(size <= sizeof(addr_t));
+    memcpy(buf, &memory_map[vm_addr], size);
+    return size;
   }
   bool ShouldUseMemoryCache(const ProcessAddress &) override { return false; }
   bool CanDebug(TargetSP, bool) override { return true; }
@@ -193,4 +194,36 @@ TEST_F(StackIDTest, ProcessOrdersCFAs) {
 
   process->opinion = CFAComparison::Older;
   EXPECT_FALSE(younger.IsYoungerThan(older, *process));
+}
+
+TEST_F(StackIDTest, WasmCFAComparison) {
+  ArchSpec arch("wasm32-unknown-wasip1");
+  PlatformSP platform_sp;
+  TargetSP target_sp;
+  m_debugger_sp->GetTargetList().CreateTarget(
+      *m_debugger_sp, "", arch, eLoadDependentsNo, platform_sp, target_sp);
+  ASSERT_TRUE(target_sp);
+  // Async context 0x100 continues in async context 0x200.
+  llvm::DenseMap<addr_t, addr_t> memory_map;
+  memory_map[0x100] = 0x200;
+  memory_map[0x200] = 0;
+  auto process = std::make_shared<MockProcess>(
+      target_sp, Listener::MakeListener("dummy"), std::move(memory_map));
+
+  StackID engine_frame(0,
+                       wasm::wasm_addr_t(wasm::WasmAddressType::Invalid, 0, 0),
+                       nullptr, nullptr);
+  StackID callee(0, 0x100, nullptr, nullptr);
+  StackID caller(0, 0x200, nullptr, nullptr);
+
+  EXPECT_EQ(
+      SwiftLanguageRuntime::CompareHeapCFAs(engine_frame, callee, *process),
+      CFAComparison::Younger);
+  EXPECT_EQ(
+      SwiftLanguageRuntime::CompareHeapCFAs(callee, engine_frame, *process),
+      CFAComparison::Older);
+  EXPECT_EQ(SwiftLanguageRuntime::CompareHeapCFAs(callee, caller, *process),
+            CFAComparison::Younger);
+  EXPECT_EQ(SwiftLanguageRuntime::CompareHeapCFAs(caller, callee, *process),
+            CFAComparison::Older);
 }

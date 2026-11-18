@@ -19,6 +19,7 @@
 #include "Plugins/ExpressionParser/Swift/SwiftPersistentExpressionState.h"
 #include "Plugins/Language/Swift/LogChannelSwift.h"
 #include "Plugins/LanguageRuntime/Swift/SwiftTask.h"
+#include "Plugins/ObjectFile/wasm/WasmAddress.h"
 #include "Plugins/Process/Utility/RegisterContext_x86.h"
 #include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
 #include "Plugins/TypeSystem/Swift/SwiftDemangle.h"
@@ -4101,11 +4102,20 @@ static llvm::Expected<bool> IsReachableParent(lldb::addr_t source,
   return false;
 }
 
+static bool IsCFAAsyncContext(const StackID &stack_id, Process &process) {
+  // UnwindWasm gives engine frames CFAs outside of linear memory, and
+  // WebAssembly memory regions do not say which memory is stack.
+  if (process.GetTarget().GetArchitecture().GetTriple().isWasm())
+    return wasm::wasm_addr_t(stack_id.GetCallFrameAddressWithoutMetadata())
+               .GetType() == wasm::WasmAddressType::Memory;
+  return !stack_id.IsCFAOnStack(process);
+}
+
 CFAComparison SwiftLanguageRuntime::CompareHeapCFAs(const StackID &lhs,
                                                     const StackID &rhs,
                                                     Process &process) {
-  const bool lhs_cfa_is_async_ctx = !lhs.IsCFAOnStack(process);
-  const bool rhs_cfa_is_async_ctx = !rhs.IsCFAOnStack(process);
+  const bool lhs_cfa_is_async_ctx = IsCFAAsyncContext(lhs, process);
+  const bool rhs_cfa_is_async_ctx = IsCFAAsyncContext(rhs, process);
   if (!lhs_cfa_is_async_ctx && !rhs_cfa_is_async_ctx)
     return CFAComparison::NoOpinion;
 

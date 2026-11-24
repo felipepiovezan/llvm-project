@@ -17,6 +17,8 @@
 namespace lldb_private {
 namespace wasm {
 
+class ThreadWasm;
+
 /// UnwindWasm manages stack unwinding for a WebAssembly process.
 class UnwindWasm : public lldb_private::Unwind {
 public:
@@ -53,6 +55,10 @@ private:
     /// The index of the frame in the engine's call stack, if it is there.
     std::optional<uint32_t> engine_frame_idx;
   };
+
+  /// The thread whose call stack the engine has: the thread or, for a thread
+  /// that an OS plugin makes, the thread backing it.
+  ThreadWasm &GetWasmThread();
 
   /// The engine's call stack, which is fetched once per stop.
   const std::vector<lldb::addr_t> &GetEngineCallStack();

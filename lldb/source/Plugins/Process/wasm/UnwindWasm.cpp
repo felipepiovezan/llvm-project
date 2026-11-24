@@ -36,11 +36,17 @@ UnwindWasm::DoCreateRegisterContextForFrame(lldb_private::StackFrame *frame) {
   return m_frames[concrete_frame_idx].reg_ctx;
 }
 
+ThreadWasm &UnwindWasm::GetWasmThread() {
+  ThreadSP backing_thread = GetThread().GetBackingThread();
+  return static_cast<ThreadWasm &>(backing_thread ? *backing_thread
+                                                  : GetThread());
+}
+
 const std::vector<lldb::addr_t> &UnwindWasm::GetEngineCallStack() {
   if (m_engine_pcs)
     return *m_engine_pcs;
 
-  ThreadWasm &wasm_thread = static_cast<ThreadWasm &>(GetThread());
+  ThreadWasm &wasm_thread = GetWasmThread();
   llvm::Expected<std::vector<lldb::addr_t>> call_stack_pcs =
       wasm_thread.GetWasmCallStack();
   if (!call_stack_pcs) {
@@ -53,7 +59,7 @@ const std::vector<lldb::addr_t> &UnwindWasm::GetEngineCallStack() {
 }
 
 UnwindWasm::Frame UnwindWasm::MakeEngineFrame(uint32_t engine_frame_idx) {
-  ThreadWasm &wasm_thread = static_cast<ThreadWasm &>(GetThread());
+  ThreadWasm &wasm_thread = GetWasmThread();
   ProcessWasm *wasm_process =
       static_cast<ProcessWasm *>(wasm_thread.GetProcess().get());
   const std::vector<lldb::addr_t> &engine_pcs = GetEngineCallStack();
@@ -110,7 +116,7 @@ std::optional<UnwindWasm::Frame> UnwindWasm::AddFrame(Frame frame) {
       frame.cfa = *cfa;
       m_frames.push_back(frame);
 
-      ThreadWasm &wasm_thread = static_cast<ThreadWasm &>(GetThread());
+      ThreadWasm &wasm_thread = GetWasmThread();
       ProcessWasm *wasm_process =
           static_cast<ProcessWasm *>(wasm_thread.GetProcess().get());
       Frame caller;

@@ -134,3 +134,30 @@ bool RegisterContextWasm::WriteRegister(const RegisterInfo *reg_info,
     return GDBRemoteRegisterContext::WriteRegister(reg_info, value);
   return false;
 }
+
+RegisterContextWasmUnwindRow::RegisterContextWasmUnwindRow(
+    ThreadGDBRemote &thread, uint32_t concrete_frame_idx,
+    DynamicRegisterInfoSP reg_info_sp, const UnwindPlan::Row &row,
+    lldb::RegisterKind row_kind, lldb::addr_t callee_cfa)
+    : RegisterContextWasm(thread, concrete_frame_idx, reg_info_sp), m_row(row),
+      m_row_kind(row_kind), m_callee_cfa(callee_cfa) {}
+
+bool RegisterContextWasmUnwindRow::ReadRegister(const RegisterInfo *reg_info,
+                                                RegisterValue &value) {
+  using AbstractRegisterLocation = UnwindPlan::Row::AbstractRegisterLocation;
+  // A register without a rule is undefined, as the frame has no other source.
+  AbstractRegisterLocation loc;
+  if (!m_row.GetRegisterInfo(reg_info->kinds[m_row_kind], loc))
+    return false;
+
+  switch (loc.GetLocationType()) {
+  case AbstractRegisterLocation::isConstant:
+    value.SetUInt64(loc.GetConstant());
+    return true;
+  case AbstractRegisterLocation::isCFAPlusOffset:
+    value.SetUInt64(m_callee_cfa + loc.GetOffset());
+    return true;
+  default:
+    return false;
+  }
+}

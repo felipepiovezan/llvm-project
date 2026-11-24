@@ -13,6 +13,7 @@
 #include "Plugins/Process/gdb-remote/ThreadGDBRemote.h"
 #include "ThreadWasm.h"
 #include "Utility/WasmVirtualRegisters.h"
+#include "lldb/Symbol/UnwindPlan.h"
 #include "lldb/lldb-private-types.h"
 #include <algorithm>
 #include <unordered_map>
@@ -71,6 +72,32 @@ private:
 
   std::unordered_map<size_t, std::unique_ptr<WasmVirtualRegisterInfo>>
       m_register_map;
+};
+
+/// The registers of a frame that only a row of an UnwindPlan describes, which
+/// is how a language runtime describes a frame of its own call chains.
+class RegisterContextWasmUnwindRow : public RegisterContextWasm {
+public:
+  RegisterContextWasmUnwindRow(process_gdb_remote::ThreadGDBRemote &thread,
+                               uint32_t concrete_frame_idx,
+                               lldb::DynamicRegisterInfoSP reg_info_sp,
+                               const UnwindPlan::Row &row,
+                               lldb::RegisterKind row_kind,
+                               lldb::addr_t callee_cfa);
+
+  bool ReadRegister(const RegisterInfo *reg_info,
+                    RegisterValue &value) override;
+
+  bool WriteRegister(const RegisterInfo *reg_info,
+                     const RegisterValue &value) override {
+    return false;
+  }
+
+private:
+  UnwindPlan::Row m_row;
+  lldb::RegisterKind m_row_kind;
+  /// The CFA of the frame that the row unwinds.
+  lldb::addr_t m_callee_cfa;
 };
 
 } // namespace wasm

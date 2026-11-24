@@ -11,8 +11,12 @@
 #include "ProcessWasm.h"
 #include "RegisterContextWasm.h"
 #include "ThreadWasm.h"
+#include "lldb/Symbol/UnwindPlan.h"
+#include "lldb/Target/LanguageRuntime.h"
+#include "lldb/Target/Process.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/RegisterValue.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -29,14 +33,7 @@ UnwindWasm::DoCreateRegisterContextForFrame(lldb_private::StackFrame *frame) {
   UnwindTo(concrete_frame_idx);
   if (m_frames.size() <= concrete_frame_idx)
     return lldb::RegisterContextSP();
-
-  ThreadSP thread = frame->GetThread();
-  ThreadGDBRemote *gdb_thread = static_cast<ThreadGDBRemote *>(thread.get());
-  ProcessWasm *wasm_process =
-      static_cast<ProcessWasm *>(thread->GetProcess().get());
-
-  return std::make_shared<RegisterContextWasm>(*gdb_thread, concrete_frame_idx,
-                                               wasm_process->GetRegisterInfo());
+  return m_frames[concrete_frame_idx].reg_ctx;
 }
 
 const std::vector<lldb::addr_t> &UnwindWasm::GetEngineCallStack() {
@@ -55,16 +52,99 @@ const std::vector<lldb::addr_t> &UnwindWasm::GetEngineCallStack() {
   return m_engine_pcs.emplace(std::move(*call_stack_pcs));
 }
 
-void UnwindWasm::UnwindTo(uint32_t frame_idx) {
+UnwindWasm::Frame UnwindWasm::MakeEngineFrame(uint32_t engine_frame_idx) {
+  ThreadWasm &wasm_thread = static_cast<ThreadWasm &>(GetThread());
+  ProcessWasm *wasm_process =
+      static_cast<ProcessWasm *>(wasm_thread.GetProcess().get());
   const std::vector<lldb::addr_t> &engine_pcs = GetEngineCallStack();
-  while (m_frames.size() <= frame_idx && m_frames.size() < engine_pcs.size()) {
-    const uint32_t engine_frame_idx = m_frames.size();
-    // The distance to the outermost frame does not change as frames are pushed
-    // and popped above it.
-    m_frames.push_back(
-        {engine_pcs[engine_frame_idx],
-         kWasmSyntheticCFABase + engine_pcs.size() - 1 - engine_frame_idx});
+  Frame frame;
+  frame.pc = engine_pcs[engine_frame_idx];
+  // The distance to the outermost frame does not change as frames are pushed
+  // and popped above it.
+  frame.cfa = kWasmSyntheticCFABase + engine_pcs.size() - 1 - engine_frame_idx;
+  frame.behaves_like_zeroth_frame = engine_frame_idx == 0;
+  frame.reg_ctx = std::make_shared<RegisterContextWasm>(
+      wasm_thread, engine_frame_idx, wasm_process->GetRegisterInfo());
+  frame.engine_frame_idx = engine_frame_idx;
+  return frame;
+}
+
+/// Reads the CFA rules of the UnwindPlans of language runtimes.
+static std::optional<lldb::addr_t>
+ReadCFA(const UnwindPlan::Row::FAValue &cfa_value, lldb::RegisterKind kind,
+        RegisterContext &regctx) {
+  switch (cfa_value.GetValueType()) {
+  case UnwindPlan::Row::FAValue::isConstant:
+    return cfa_value.GetConstant();
+  case UnwindPlan::Row::FAValue::isRegisterDereferenced: {
+    const RegisterInfo *reg_info = regctx.GetRegisterInfoAtIndex(
+        regctx.ConvertRegisterKindToRegisterNumber(
+            kind, cfa_value.GetRegisterNumber()));
+    RegisterValue value;
+    if (!reg_info || !regctx.ReadRegister(reg_info, value))
+      return std::nullopt;
+    llvm::Expected<lldb::addr_t> cfa =
+        regctx.GetThread().GetProcess()->ReadPointerFromMemory(
+            value.GetAsUInt64());
+    if (!cfa) {
+      LLDB_LOG_ERROR(GetLog(LLDBLog::Unwind), cfa.takeError(),
+                     "Failed to read the CFA: {0}");
+      return std::nullopt;
+    }
+    return *cfa;
   }
+  default:
+    return std::nullopt;
+  }
+}
+
+std::optional<UnwindWasm::Frame> UnwindWasm::AddFrame(Frame frame) {
+  if (UnwindPlanSP plan = LanguageRuntime::GetRuntimeUnwindPlan(
+          GetThread(), frame.reg_ctx.get(), frame.behaves_like_zeroth_frame)) {
+    // The runtime makes its UnwindPlan for the PC of the frame.
+    const UnwindPlan::Row *row = plan->GetLastRow();
+    if (std::optional<lldb::addr_t> cfa =
+            row ? ReadCFA(row->GetCFAValue(), plan->GetRegisterKind(),
+                          *frame.reg_ctx)
+                : std::nullopt) {
+      frame.cfa = *cfa;
+      m_frames.push_back(frame);
+
+      ThreadWasm &wasm_thread = static_cast<ThreadWasm &>(GetThread());
+      ProcessWasm *wasm_process =
+          static_cast<ProcessWasm *>(wasm_thread.GetProcess().get());
+      Frame caller;
+      caller.reg_ctx = std::make_shared<RegisterContextWasmUnwindRow>(
+          wasm_thread, m_frames.size(), wasm_process->GetRegisterInfo(), *row,
+          plan->GetRegisterKind(), *cfa);
+      caller.pc = caller.reg_ctx->GetPC();
+      caller.cfa = LLDB_INVALID_ADDRESS;
+      caller.behaves_like_zeroth_frame = false;
+      if (caller.pc == LLDB_INVALID_ADDRESS)
+        return std::nullopt;
+      return caller;
+    }
+  }
+
+  // Without a runtime, only the engine knows a caller, as UnwindLLDB has no
+  // UnwindPlan for WebAssembly.
+  if (!frame.engine_frame_idx)
+    return std::nullopt;
+  m_frames.push_back(frame);
+  const uint32_t caller_engine_frame_idx = *frame.engine_frame_idx + 1;
+  if (caller_engine_frame_idx >= GetEngineCallStack().size())
+    return std::nullopt;
+  return MakeEngineFrame(caller_engine_frame_idx);
+}
+
+void UnwindWasm::UnwindTo(uint32_t frame_idx) {
+  if (!m_unwind_started) {
+    m_unwind_started = true;
+    if (!GetEngineCallStack().empty())
+      m_next_frame = MakeEngineFrame(0);
+  }
+  while (m_frames.size() <= frame_idx && m_next_frame)
+    m_next_frame = AddFrame(std::move(*m_next_frame));
 }
 
 uint32_t UnwindWasm::DoGetFrameCount() {
@@ -86,7 +166,7 @@ bool UnwindWasm::DoGetFrameInfoAtIndex(uint32_t frame_idx, lldb::addr_t &cfa,
   if (frame_idx >= m_frames.size())
     return false;
 
-  behaves_like_zeroth_frame = (frame_idx == 0);
+  behaves_like_zeroth_frame = m_frames[frame_idx].behaves_like_zeroth_frame;
   cfa = m_frames[frame_idx].cfa;
   pc = m_frames[frame_idx].pc;
   return true;

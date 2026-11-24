@@ -31,6 +31,8 @@ protected:
   void DoClear() override {
     m_engine_pcs.reset();
     m_frames.clear();
+    m_next_frame.reset();
+    m_unwind_started = false;
   }
 
   uint32_t DoGetFrameCount() override;
@@ -46,16 +48,28 @@ private:
   struct Frame {
     lldb::addr_t pc;
     lldb::addr_t cfa;
+    bool behaves_like_zeroth_frame;
+    lldb::RegisterContextSP reg_ctx;
+    /// The index of the frame in the engine's call stack, if it is there.
+    std::optional<uint32_t> engine_frame_idx;
   };
 
   /// The engine's call stack, which is fetched once per stop.
   const std::vector<lldb::addr_t> &GetEngineCallStack();
+
+  Frame MakeEngineFrame(uint32_t engine_frame_idx);
+
+  /// Adds \p frame, unless nothing knows its CFA, and returns its caller.
+  std::optional<Frame> AddFrame(Frame frame);
 
   /// Unwinds until frame \p frame_idx exists or the stack ends.
   void UnwindTo(uint32_t frame_idx);
 
   std::optional<std::vector<lldb::addr_t>> m_engine_pcs;
   std::vector<Frame> m_frames;
+  /// The caller of the last frame.
+  std::optional<Frame> m_next_frame;
+  bool m_unwind_started = false;
 
   UnwindWasm(const UnwindWasm &);
   const UnwindWasm &operator=(const UnwindWasm &) = delete;

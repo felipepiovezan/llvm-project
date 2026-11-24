@@ -3946,13 +3946,12 @@ static bool IsAsyncContextChainFrame(RegisterContext &regctx,
   if (!process.GetTarget().GetArchitecture().GetTriple().isWasm())
     return regctx.GetFP(LLDB_INVALID_ADDRESS) == LLDB_INVALID_ADDRESS;
 
-  // WebAssembly has no fp reg. There, UnwindLLDB makes callers only through
-  // the AsyncContext chain, and frame 0 is live only on a thread that a real
-  // thread backs, as the OS plugin does for a running task. Nothing backs a
-  // ThreadTask, even one that `language swift task select` lists.
-  if (regctx.GetConcreteFrameIndex() != 0)
-    return true;
-  return !regctx.GetThread().GetBackingThread();
+  // WebAssembly has no fp reg. Instead, only a frame of the engine's call stack
+  // can read globals.
+  const RegisterInfo *global =
+      regctx.GetRegisterInfoAtIndex(GetWasmRegister(eWasmTagGlobal, 0));
+  RegisterValue value;
+  return !global || !regctx.ReadRegister(global, value);
 }
 
 // Examine the register state and detect the transition from a real

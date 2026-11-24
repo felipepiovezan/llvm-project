@@ -32,6 +32,9 @@ public:
   lldb::RegisterContextSP
   CreateRegisterContextForFrame(StackFrame *frame) override;
 
+  std::unique_ptr<Unwind>
+  CreateUnwinderForBackedThread(Thread &backed_thread) override;
+
 protected:
   Unwind &GetUnwinder() override;
 

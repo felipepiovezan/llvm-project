@@ -26,6 +26,11 @@ Unwind &ThreadWasm::GetUnwinder() {
   return *m_unwinder_up;
 }
 
+std::unique_ptr<Unwind>
+ThreadWasm::CreateUnwinderForBackedThread(Thread &backed_thread) {
+  return std::make_unique<wasm::UnwindWasm>(backed_thread);
+}
+
 llvm::Expected<std::vector<lldb::addr_t>> ThreadWasm::GetWasmCallStack() {
   if (ProcessSP process_sp = GetProcess()) {
     ProcessWasm *wasm_process = static_cast<ProcessWasm *>(process_sp.get());

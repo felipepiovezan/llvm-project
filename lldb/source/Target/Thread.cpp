@@ -2293,6 +2293,11 @@ Unwind &Thread::GetUnwinder() {
   return *m_unwinder_up;
 }
 
+std::unique_ptr<Unwind>
+Thread::CreateUnwinderForBackedThread(Thread &backed_thread) {
+  return nullptr;
+}
+
 void Thread::Flush() {
   ClearStackFrames();
   m_reg_context_sp.reset();

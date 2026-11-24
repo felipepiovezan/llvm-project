@@ -64,6 +64,12 @@ ThreadMemory::CreateRegisterContextForFrame(StackFrame *frame) {
   return GetUnwinder().CreateRegisterContextForFrame(frame);
 }
 
+Unwind &ThreadMemory::GetUnwinder() {
+  if (!m_unwinder_up && m_backing_thread_sp)
+    m_unwinder_up = m_backing_thread_sp->CreateUnwinderForBackedThread(*this);
+  return Thread::GetUnwinder();
+}
+
 bool ThreadMemory::CalculateStopInfo() {
   if (m_backing_thread_sp) {
     lldb::StopInfoSP backing_stop_info_sp(

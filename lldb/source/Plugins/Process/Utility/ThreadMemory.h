@@ -149,6 +149,9 @@ public:
 
   bool IsOperatingSystemPluginThread() const override { return true; }
 
+protected:
+  lldb_private::Unwind &GetUnwinder() override;
+
 private:
   lldb::addr_t m_register_data_addr;
   lldb::ThreadSP m_backing_thread_sp;

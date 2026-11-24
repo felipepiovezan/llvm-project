@@ -541,6 +541,11 @@ public:
 
   virtual lldb::ThreadSP GetBackingThread() const { return lldb::ThreadSP(); }
 
+  /// Returns an unwinder for \p backed_thread, a thread that this thread
+  /// backs, or null for the default unwinder.
+  virtual std::unique_ptr<Unwind>
+  CreateUnwinderForBackedThread(Thread &backed_thread);
+
   virtual void ClearBackingThread() {
     // Subclasses can use this function if a thread is actually backed by
     // another thread. This is currently used for the OperatingSystem plug-ins

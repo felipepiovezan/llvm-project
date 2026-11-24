@@ -26,6 +26,7 @@ static constexpr lldb::addr_t kWasmSyntheticCFABase =
 lldb::RegisterContextSP
 UnwindWasm::DoCreateRegisterContextForFrame(lldb_private::StackFrame *frame) {
   const uint32_t concrete_frame_idx = frame->GetConcreteFrameIndex();
+  UnwindTo(concrete_frame_idx);
   if (m_frames.size() <= concrete_frame_idx)
     return lldb::RegisterContextSP();
 
@@ -38,12 +39,9 @@ UnwindWasm::DoCreateRegisterContextForFrame(lldb_private::StackFrame *frame) {
                                                wasm_process->GetRegisterInfo());
 }
 
-uint32_t UnwindWasm::DoGetFrameCount() {
-  if (m_unwind_complete)
-    return GetVisibleFrameCount();
-
-  m_unwind_complete = true;
-  m_frames.clear();
+const std::vector<lldb::addr_t> &UnwindWasm::GetEngineCallStack() {
+  if (m_engine_pcs)
+    return *m_engine_pcs;
 
   ThreadWasm &wasm_thread = static_cast<ThreadWasm &>(GetThread());
   llvm::Expected<std::vector<lldb::addr_t>> call_stack_pcs =
@@ -51,44 +49,53 @@ uint32_t UnwindWasm::DoGetFrameCount() {
   if (!call_stack_pcs) {
     LLDB_LOG_ERROR(GetLog(LLDBLog::Unwind), call_stack_pcs.takeError(),
                    "Failed to get Wasm callstack: {0}");
-    m_frames.clear();
-    return 0;
+    return m_engine_pcs.emplace();
   }
 
-  m_frames = *call_stack_pcs;
-  return GetVisibleFrameCount();
+  return m_engine_pcs.emplace(std::move(*call_stack_pcs));
 }
 
-uint32_t UnwindWasm::GetVisibleFrameCount() {
+void UnwindWasm::UnwindTo(uint32_t frame_idx) {
+  const std::vector<lldb::addr_t> &engine_pcs = GetEngineCallStack();
+  while (m_frames.size() <= frame_idx && m_frames.size() < engine_pcs.size()) {
+    const uint32_t engine_frame_idx = m_frames.size();
+    // The distance to the outermost frame does not change as frames are pushed
+    // and popped above it.
+    m_frames.push_back(
+        {engine_pcs[engine_frame_idx],
+         kWasmSyntheticCFABase + engine_pcs.size() - 1 - engine_frame_idx});
+  }
+}
+
+uint32_t UnwindWasm::DoGetFrameCount() {
   // A backtrace goes no deeper than the target asks for, which is what bounds
-  // the walk of a stack that recurses without end. The depth bounds what a
-  // caller is told rather than what is kept, because it can be raised after a
-  // stack has been fetched.
-  return std::min<uint64_t>(m_frames.size(),
-                            GetThread().GetMaxBacktraceDepth());
+  // the walk of a stack that recurses without end.
+  const uint32_t max_depth = GetThread().GetMaxBacktraceDepth();
+  if (max_depth != 0)
+    UnwindTo(max_depth - 1);
+  return std::min<uint64_t>(m_frames.size(), max_depth);
 }
 
 bool UnwindWasm::DoGetFrameInfoAtIndex(uint32_t frame_idx, lldb::addr_t &cfa,
                                        lldb::addr_t &pc,
                                        bool &behaves_like_zeroth_frame) {
-  if (m_frames.size() == 0)
-    DoGetFrameCount();
+  if (frame_idx >= GetThread().GetMaxBacktraceDepth())
+    return false;
 
-  if (frame_idx >= GetVisibleFrameCount())
+  UnwindTo(frame_idx);
+  if (frame_idx >= m_frames.size())
     return false;
 
   behaves_like_zeroth_frame = (frame_idx == 0);
-  // The distance to the outermost frame does not change as frames are pushed
-  // and popped above it.
-  cfa = kWasmSyntheticCFABase + m_frames.size() - 1 - frame_idx;
-  pc = m_frames[frame_idx];
+  cfa = m_frames[frame_idx].cfa;
+  pc = m_frames[frame_idx].pc;
   return true;
 }
 
 lldb::addr_t UnwindWasm::GetEngineFramePC(uint32_t engine_frame_idx) {
   std::lock_guard<std::recursive_mutex> guard(m_unwind_mutex);
-  DoGetFrameCount();
-  if (engine_frame_idx >= m_frames.size())
+  const std::vector<lldb::addr_t> &engine_pcs = GetEngineCallStack();
+  if (engine_frame_idx >= engine_pcs.size())
     return LLDB_INVALID_ADDRESS;
-  return m_frames[engine_frame_idx];
+  return engine_pcs[engine_frame_idx];
 }

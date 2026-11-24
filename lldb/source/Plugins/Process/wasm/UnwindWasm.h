@@ -11,6 +11,7 @@
 
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/Unwind.h"
+#include <optional>
 #include <vector>
 
 namespace lldb_private {
@@ -28,8 +29,8 @@ public:
 
 protected:
   void DoClear() override {
+    m_engine_pcs.reset();
     m_frames.clear();
-    m_unwind_complete = false;
   }
 
   uint32_t DoGetFrameCount() override;
@@ -42,12 +43,19 @@ protected:
   DoCreateRegisterContextForFrame(lldb_private::StackFrame *frame) override;
 
 private:
-  /// The number of fetched frames a caller is told about, which the target's
-  /// maximum backtrace depth bounds.
-  uint32_t GetVisibleFrameCount();
+  struct Frame {
+    lldb::addr_t pc;
+    lldb::addr_t cfa;
+  };
 
-  std::vector<lldb::addr_t> m_frames;
-  bool m_unwind_complete = false;
+  /// The engine's call stack, which is fetched once per stop.
+  const std::vector<lldb::addr_t> &GetEngineCallStack();
+
+  /// Unwinds until frame \p frame_idx exists or the stack ends.
+  void UnwindTo(uint32_t frame_idx);
+
+  std::optional<std::vector<lldb::addr_t>> m_engine_pcs;
+  std::vector<Frame> m_frames;
 
   UnwindWasm(const UnwindWasm &);
   const UnwindWasm &operator=(const UnwindWasm &) = delete;

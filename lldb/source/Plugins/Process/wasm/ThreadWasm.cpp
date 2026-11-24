@@ -34,13 +34,9 @@ llvm::Expected<std::vector<lldb::addr_t>> ThreadWasm::GetWasmCallStack() {
   return llvm::createStringError("no process");
 }
 
-lldb::addr_t ThreadWasm::GetConcreteFramePC(uint32_t concrete_frame_idx) {
-  lldb::addr_t cfa, pc;
-  bool behaves_like_zeroth_frame;
-  if (GetUnwinder().GetFrameInfoAtIndex(concrete_frame_idx, cfa, pc,
-                                        behaves_like_zeroth_frame))
-    return pc;
-  return LLDB_INVALID_ADDRESS;
+lldb::addr_t ThreadWasm::GetEngineFramePC(uint32_t engine_frame_idx) {
+  return static_cast<UnwindWasm &>(GetUnwinder())
+      .GetEngineFramePC(engine_frame_idx);
 }
 
 lldb::RegisterContextSP

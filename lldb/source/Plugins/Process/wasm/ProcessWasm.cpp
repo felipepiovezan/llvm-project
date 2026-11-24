@@ -175,7 +175,7 @@ ProcessWasm::GetFallbackFrameIndex(uint32_t module_id) {
     ThreadWasm &wasm_thread = static_cast<ThreadWasm &>(*thread);
     // A frame can only stand in for the module the stub reports it executing.
     for (uint32_t frame_index = 0;; ++frame_index) {
-      lldb::addr_t pc = wasm_thread.GetConcreteFramePC(frame_index);
+      lldb::addr_t pc = wasm_thread.GetEngineFramePC(frame_index);
       if (pc == LLDB_INVALID_ADDRESS)
         break;
       if (GetWasmModuleID(pc) == module_id)

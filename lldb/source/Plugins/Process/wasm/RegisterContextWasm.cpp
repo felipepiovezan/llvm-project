@@ -84,9 +84,9 @@ bool RegisterContextWasm::ReadRegister(const RegisterInfo *reg_info,
   if (reg_info->name) {
     // A caller frame's PC is the unwound return address, which the base
     // register context cannot provide because it only sees the innermost
-    // frame's live PC. Use the PC the unwinder recorded for this frame.
+    // frame's live PC. Use the PC the engine reports for this frame.
     if (m_concrete_frame_idx > 0) {
-      lldb::addr_t pc = wasm_thread.GetConcreteFramePC(m_concrete_frame_idx);
+      lldb::addr_t pc = wasm_thread.GetEngineFramePC(m_concrete_frame_idx);
       if (pc != LLDB_INVALID_ADDRESS) {
         value.SetUInt(pc, reg_info->byte_size);
         return true;

@@ -84,3 +84,11 @@ bool UnwindWasm::DoGetFrameInfoAtIndex(uint32_t frame_idx, lldb::addr_t &cfa,
   pc = m_frames[frame_idx];
   return true;
 }
+
+lldb::addr_t UnwindWasm::GetEngineFramePC(uint32_t engine_frame_idx) {
+  std::lock_guard<std::recursive_mutex> guard(m_unwind_mutex);
+  DoGetFrameCount();
+  if (engine_frame_idx >= m_frames.size())
+    return LLDB_INVALID_ADDRESS;
+  return m_frames[engine_frame_idx];
+}

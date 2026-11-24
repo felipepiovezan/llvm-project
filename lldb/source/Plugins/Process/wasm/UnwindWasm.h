@@ -22,6 +22,10 @@ public:
   UnwindWasm(lldb_private::Thread &thread) : Unwind(thread) {}
   ~UnwindWasm() override = default;
 
+  /// Returns the PC of frame \p engine_frame_idx of the engine's call stack, or
+  /// LLDB_INVALID_ADDRESS.
+  lldb::addr_t GetEngineFramePC(uint32_t engine_frame_idx);
+
 protected:
   void DoClear() override {
     m_frames.clear();
